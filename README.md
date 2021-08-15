@@ -37,4 +37,5 @@ Next, delete the .example from the file name of tokens.py.example, enter the tok
 You can start it with `python3 yomi-KAI.py`.
 ## Note
 ## Author
+GardenTree [[Twitter]](https://twitter.com/Garden__Tree)
 ## Licence
