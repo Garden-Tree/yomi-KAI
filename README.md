@@ -4,6 +4,6 @@ yomi-KAIはdiscordのテキストチャンネルに送られた文章をボイ�
 ## 使い方
 必要なライブラリをインストールします。
 
-`pip install discord.py[voice], python-voicetext`
+`pip install -r requirements.txt`
 
 tokens.py.exampleの.exampleを削除して、中にトークンを入力して上書き保存してください。
