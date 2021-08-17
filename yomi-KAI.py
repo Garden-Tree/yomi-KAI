@@ -10,7 +10,7 @@ import tokens
 
 
 client = discord.Client()
-vt = VoiceText(tokens.VOICETEXT_TOKEN)
+vt = VoiceText(tokens.VOICETEXT_API_KEY)
 check_text_channel = None
 
 
