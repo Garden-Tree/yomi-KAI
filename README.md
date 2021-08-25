@@ -2,6 +2,7 @@
 [![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/Garden-Tree/yomi-KAI?include_prereleases)](https://github.com/Garden-Tree/yomi-KAI/releases)
 [![GitHub stars](https://img.shields.io/github/stars/Garden-Tree/yomi-KAI)](https://github.com/Garden-Tree/yomi-KAI/stargazers)
 [![GitHub license](https://img.shields.io/github/license/Garden-Tree/yomi-KAI)](https://github.com/Garden-Tree/yomi-KAI/blob/main/LICENSE)
+
 ## 概要
 yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイスチャンネルで読み上げるbotです。
 
@@ -19,7 +20,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 - python-voicetext
 
 ## インストール
-1. `pip install -r requirements.txt`を実行してライブラリをインストール。  
+1. `pip3 install -r requirements.txt`を実行してライブラリをインストール。  
 2. `tokens.py.example`を開き、中にDiscordのトークンとVoiceTextのAPIキーを入力。
 3. `tokens.py`で名前をつけて保存。
 
@@ -33,6 +34,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ボイスチャンネルから切断します。
 
 ## 注意
+`PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をインストールして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio`をyumやaptでインストールしてください。
 
 ## 作者
 GardenTree [[Twitter]](https://twitter.com/Garden__Tree)
