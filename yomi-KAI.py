@@ -18,6 +18,11 @@ vt = VoiceText(tokens.VOICETEXT_API_KEY)
 check_text_channel = None
 
 
+def mention(Text):
+    P = "<@!?([0-9]+)>" #パターン
+    return re.findall(P,Text) #メンションからユーザーIDの抜き出し
+
+
 queue_dict = defaultdict(deque)
 
 def enqueue(voice_client, guild, source):
@@ -85,21 +90,23 @@ async def on_message(message):
             read_msg = re.sub(r"https?://.*", "URL", message.content)
 
             #メンション置換
-            pattern = r"<@!?[0-9]*>"
-            user_mention = re.search(pattern, read_msg)
-            user_id = int(re.sub(r"\D", "", user_mention.group()))
-            user = re.sub(r"#\d{4}", "", str(client.get_user(user_id)))
-            read_msg = "アット" + re.sub(pattern, user, read_msg)
+            if "<@" and ">" in message.content: #メンションがあった場合実行
+                Temp = mention(message.content)
+                for i in range(len(Temp)): #返り値(リスト型)の回数ループ
+                    Temp[i] = int(Temp[i]) #返り値のデータをstrからintに変換
+                for i in range(len(Temp)): #返り値(リスト型)の(ry
+                    user = re.sub(r"#\d{4}", "", str(client.get_user(Temp[i]))) #ユーザー情報取得
+                    read_msg = "アット" + re.sub("<@![0-9]+>",user,read_msg) 
             
-            
-            print(read_msg)
+
             #音声ファイル作成
             ut = time.time()
             with open(f"./temp/{ut}.wav","wb") as f:
                 f.write(vt.speed(120).to_wave(read_msg))
 
             enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
-        
+            dt_now = datetime.datetime.now()
+            print(f"[{dt_now}]ReadSentence:{read_msg}")
             #音声読み上げ
             #message.guild.voice_client.play(discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
             
@@ -107,7 +114,9 @@ async def on_message(message):
             #音声ファイル削除
             with wave.open(f"./temp/{ut}.wav", "rb")as f:
                 wave_length=(f.getnframes() / f.getframerate()) #再生時間
-            print(f"PlayTime:{wave_length}")
+                
+            dt_now = datetime.datetime.now()
+            print(f"[{dt_now}]PlayTime:{wave_length}")
             await asyncio.sleep(wave_length + 10)
             os.remove(f"./temp/{ut}.wav")
 
