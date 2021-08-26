@@ -7,9 +7,13 @@ import wave
 import asyncio
 from collections import defaultdict, deque
 import tokens
+import re
 
+intents = discord.Intents.default()
+intents.members = True 
+client = discord.Client(intents=intents)
 
-client = discord.Client()
+#client = discord.Client()
 vt = VoiceText(tokens.VOICETEXT_API_KEY)
 check_text_channel = None
 
@@ -75,22 +79,36 @@ async def on_message(message):
     #読み上げ
     elif message.channel == check_text_channel:
         if message.guild.voice_client is not None:
+
+            #文字置換
+            #URL置換
+            read_msg = re.sub(r"https?://.*", "URL", message.content)
+
+            #メンション置換
+            pattern = r"<@!?[0-9]*>"
+            user_mention = re.search(pattern, read_msg)
+            user_id = int(re.sub(r"\D", "", user_mention.group()))
+            user = re.sub(r"#\d{4}", "", str(client.get_user(user_id)))
+            read_msg = "アット" + re.sub(pattern, user, read_msg)
+            
+            
+            print(read_msg)
             #音声ファイル作成
             ut = time.time()
-            with open(f"{ut}.wav","wb") as f:
-                f.write(vt.speed(120).to_wave(message.content))
+            with open(f"./temp/{ut}.wav","wb") as f:
+                f.write(vt.speed(120).to_wave(read_msg))
 
-            enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"{ut}.wav"))
+            enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
         
             #音声読み上げ
-            #message.guild.voice_client.play(discord.FFmpegPCMAudio(f"{ut}.wav"))
+            #message.guild.voice_client.play(discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
             
 
             #音声ファイル削除
-            with wave.open(f"{ut}.wav", "rb")as f:
+            with wave.open(f"./temp/{ut}.wav", "rb")as f:
                 wave_length=(f.getnframes() / f.getframerate()) #再生時間
             print(f"PlayTime:{wave_length}")
             await asyncio.sleep(wave_length + 10)
-            os.remove(f"{ut}.wav")
+            os.remove(f"./temp/{ut}.wav")
 
 client.run(tokens.DISCORD_TOKEN)
