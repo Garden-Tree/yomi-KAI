@@ -1,4 +1,5 @@
 import discord
+from discord.ext import commands
 import datetime
 import time
 import os
@@ -9,11 +10,12 @@ from collections import defaultdict, deque
 import tokens
 import re
 
+prefix = "yomi."
+
 intents = discord.Intents.default()
 intents.members = True 
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix=prefix, intents=intents)
 
-#client = discord.Client()
 vt = VoiceText(tokens.VOICETEXT_API_KEY)
 check_text_channel = None
 
@@ -39,48 +41,66 @@ def play(voice_client, queue):
 
 
 #接続時の処理
-@client.event
+@bot.event
 async def on_ready():
     dt_now = datetime.datetime.now()
-    print(f"[{dt_now}]Launch complete!")
+    print(f"[{dt_now}][INFO]Launch complete! Logged in as {bot.user.name}.")
+
+#もとからあるhelpコマンドを無効化
+bot.remove_command('help')
+
+embed = discord.Embed(title="yomi-KAI", description="テキスト読み上げbotです。", inline="false")
+embed.add_field(name=f"{prefix}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
+embed.add_field(name=f"{prefix}dc", value="ボイスチャンネルから切断します。", inline="false")
+embed.add_field(name=f"{prefix}help", value="このヘルプを表示します。", inline="false")
+
+#ヘルプコマンド
+@bot.command()
+async def help(ctx):
+    await ctx.send(embed=embed)
+
+#ボイスチャンネルに接続
+@bot.command()
+async def c(ctx):
+    if ctx.author.voice is None:
+        await ctx.channel.send(f"{ctx.author.mention}さんはボイスチャンネルに接続していません")
+        dt_now = datetime.datetime.now()
+        print(f"[{dt_now}][INFO]{ctx.author}さんはボイスチャンネルに接続していません")          
+    
+    else:
+        await ctx.author.voice.channel.connect()
+        global check_text_channel
+        check_text_channel = ctx.channel
+        await ctx.channel.send(f"{ctx.author.voice.channel.name}に接続しました")
+        dt_now = datetime.datetime.now()
+        print(f"[{dt_now}][INFO]{ctx.author.voice.channel.name}に接続しました")
+
+#ボイスチャンネルから切断
+@bot.command()
+async def dc(ctx):
+    if ctx.guild.voice_client is None:
+        await ctx.channel.send("ボイスチャンネルに接続していません")
+        dt_now = datetime.datetime.now()
+        print(f"[{dt_now}][INFO]ボイスチャンネルに接続していません")
+
+    else:
+        await ctx.guild.voice_client.disconnect()
+        await ctx.channel.send("切断しました")
+        dt_now = datetime.datetime.now()
+        print(f"[{dt_now}][INFO]切断しました")
 
 #メッセージが送られた時
-@client.event
+@bot.event
 async def on_message(message):
-    
+    #コマンドをコマンドとしてトリガーし、読み上げから除外
+    if message.content.startswith(prefix):
+        await bot.process_commands(message)
+        return
+
     #botの発言は無視
     if message.author.bot:
         return
-    
-    #ボイスチャンネルに接続
-    elif message.content == "yomi.c":
-        if message.author.voice is None:
-            await message.channel.send(f"{message.author.mention}さんはボイスチャンネルに接続していません")
-            dt_now = datetime.datetime.now()
-            print(f"[{dt_now}]{message.author}さんはボイスチャンネルに接続していません")          
-        
-        else:
-            await message.author.voice.channel.connect()
-            global check_text_channel
-            check_text_channel = message.channel
-            await message.channel.send(f"{message.author.voice.channel.name}に接続しました")
-            dt_now = datetime.datetime.now()
-            print(f"[{dt_now}]{message.author.voice.channel.name}に接続しました")
-            
-    
-    #ボイスチャンネルから切断
-    elif message.content == "yomi.dc":
-        if message.guild.voice_client is None:
-            await message.channel.send("ボイスチャンネルに接続していません")
-            dt_now = datetime.datetime.now()
-            print(f"[{dt_now}]ボイスチャンネルに接続していません")
 
-        else:
-            await message.guild.voice_client.disconnect()
-            await message.channel.send("切断しました")
-            dt_now = datetime.datetime.now()
-            print(f"[{dt_now}]切断しました")
-            
     #読み上げ
     elif message.channel == check_text_channel:
         if message.guild.voice_client is not None:
@@ -95,8 +115,8 @@ async def on_message(message):
                 for i in range(len(Temp)): #返り値(リスト型)の回数ループ
                     Temp[i] = int(Temp[i]) #返り値のデータをstrからintに変換
                 for i in range(len(Temp)): #返り値(リスト型)の(ry
-                    user = re.sub(r"#\d{4}", "", str(client.get_user(Temp[i]))) #ユーザー情報取得
-                    read_msg = "アット" + re.sub("<@![0-9]+>",user,read_msg) 
+                    user = re.sub(r"#\d{4}", "", str(bot.get_user(Temp[i]))) #ユーザー情報取得
+                    read_msg = "アット" + re.sub("<@!?[0-9]+>",user,read_msg) 
             
 
             #音声ファイル作成
@@ -104,20 +124,19 @@ async def on_message(message):
             with open(f"./temp/{ut}.wav","wb") as f:
                 f.write(vt.speed(120).to_wave(read_msg))
 
+            #音声読み上げ
             enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
             dt_now = datetime.datetime.now()
-            print(f"[{dt_now}]ReadSentence:{read_msg}")
-            #音声読み上げ
-            #message.guild.voice_client.play(discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
-            
+            print(f"[{dt_now}][INFO]ReadSentence:{read_msg}")
 
             #音声ファイル削除
             with wave.open(f"./temp/{ut}.wav", "rb")as f:
                 wave_length=(f.getnframes() / f.getframerate()) #再生時間
                 
             dt_now = datetime.datetime.now()
-            print(f"[{dt_now}]PlayTime:{wave_length}")
+            print(f"[{dt_now}][INFO]PlayTime:{wave_length}")
             await asyncio.sleep(wave_length + 10)
             os.remove(f"./temp/{ut}.wav")
 
-client.run(tokens.DISCORD_TOKEN)
+
+bot.run(tokens.DISCORD_TOKEN)
