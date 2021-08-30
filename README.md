@@ -32,9 +32,11 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 発言者と同じボイスチャンネルに接続します。
 ### yomi.dc
 ボイスチャンネルから切断します。
+### yomi.help
+このヘルプを表示します。
 
 ## 注意
-- `PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をインストールして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio`をyumやaptでインストールしてください。
+- `PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をダウンロードして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio`をyumやaptでインストールしてください。
 - DiscordのBot設定の`Privileged Gateway Intents`の権限が必要です。[Discord Developer Portal](https://discord.com/developers/applications)から権限を付与してください。
 
 ## 作者
