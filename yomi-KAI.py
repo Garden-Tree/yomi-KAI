@@ -9,6 +9,7 @@ import asyncio
 from collections import defaultdict, deque
 import tokens
 import re
+import json
 
 prefix = "yomi."
 
@@ -89,6 +90,20 @@ async def dc(ctx):
         dt_now = datetime.datetime.now()
         print(f"[{dt_now}][INFO]切断しました")
 
+@bot.command()
+async def dict(ctx, arg1, arg2, arg3):
+    if arg1 == "add":
+        if os.path.isfile(f"./dict/{ctx.guild.id}.json") == True:
+            with open(f"./dict/{ctx.guild.id}.json", "r", encoding="UTF-8")as f:
+                word = json.load(f)
+        else:
+            word = {}
+        
+        word[arg2] = arg3
+        with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
+            f.write(json.dumps(word, indent=2, ensure_ascii=False))
+
+
 #メッセージが送られた時
 @bot.event
 async def on_message(message):
@@ -116,9 +131,8 @@ async def on_message(message):
                     Temp[i] = int(Temp[i]) #返り値のデータをstrからintに変換
                 for i in range(len(Temp)): #返り値(リスト型)の(ry
                     user = re.sub(r"#\d{4}", "", str(bot.get_user(Temp[i]))) #ユーザー情報取得
-                    read_msg = "アット" + re.sub("<@!?[0-9]+>",user,read_msg) 
+                    read_msg = "アット" + re.sub("<@!?[0-9]+>", user, read_msg) 
             
-
             #音声ファイル作成
             ut = time.time()
             with open(f"./temp/{ut}.wav","wb") as f:
@@ -135,7 +149,7 @@ async def on_message(message):
                 
             dt_now = datetime.datetime.now()
             print(f"[{dt_now}][INFO]PlayTime:{wave_length}")
-            await asyncio.sleep(wave_length + 10)
+            await asyncio.sleep(wave_length + 5)
             os.remove(f"./temp/{ut}.wav")
 
 
