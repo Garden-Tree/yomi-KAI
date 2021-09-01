@@ -133,6 +133,19 @@ async def on_message(message):
                     user = re.sub(r"#\d{4}", "", str(bot.get_user(Temp[i]))) #ユーザー情報取得
                     read_msg = "アット" + re.sub("<@!?[0-9]+>", user, read_msg) 
             
+
+            if os.path.isfile(f"./dict/{message.guild.id}.json") == True:
+                with open(f"./dict/{message.guild.id}.json", "r", encoding="UTF-8")as f:
+                    word = json.load(f)
+
+                read_list = [] # あとでまとめて変換するときの読み仮名リスト
+                for i, one_dic in enumerate(word.items()): # one_dicは単語と読みのタプル。添字はそれぞれ0と1。
+                    read_msg = read_msg.replace(one_dic[0], '{'+str(i)+'}')
+                    read_list.append(one_dic[1]) # 変換が発生した順に読みがなリストに追加
+
+                read_msg = read_msg.format(*read_list) #読み仮名リストを引数にとる
+                print(read_msg)
+
             #音声ファイル作成
             ut = time.time()
             with open(f"./temp/{ut}.wav","wb") as f:
