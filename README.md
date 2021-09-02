@@ -25,6 +25,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 3. `tokens.py`で名前をつけて保存。
 
 ## 使い方
+
 `python3 yomi-KAI.py`
 
 ## コマンド
@@ -32,12 +33,16 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 発言者と同じボイスチャンネルに接続します。
 ### yomi.dc
 ボイスチャンネルから切断します。
+### yomi.dict
+辞書に関する操作です。詳しくは`yomi.dict help`を参照してください。
 ### yomi.help
 このヘルプを表示します。
 
 ## 注意
-- `PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をダウンロードして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio`をyumやaptでインストールしてください。
+- `PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をダウンロードして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio19-dev`をyumやaptでインストールしてください。
 - DiscordのBot設定の`Privileged Gateway Intents`の権限が必要です。[Discord Developer Portal](https://discord.com/developers/applications)から権限を付与してください。
+- 本ブログラムで使用しているライブラリである`Discord.py`の開発が終了しています。そのため今後、本ブログラムも使えなくなる可能性があります。(使えなくなった場合は、`Discord.js`などでサポートは続けるつもりです。)
+- 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は`./dict/`です。
 
 ## 作者
 GardenTree [[Twitter]](https://twitter.com/Garden__Tree)
