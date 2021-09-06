@@ -21,8 +21,8 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## インストール
 1. `pip3 install -r requirements.txt`を実行してライブラリをインストール。
-2. `tokens.py.example`を開き、中にDiscordのトークンとVoiceTextのAPIキーを入力。
-3. `tokens.py`で名前をつけて保存。
+2. `settings.json.example`を開き、中にDiscordのトークンとVoiceTextのAPIキーを入力。
+3. `settings.json`で名前をつけて保存。
 
 ## 使い方
 
