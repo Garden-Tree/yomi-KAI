@@ -218,4 +218,17 @@ async def on_message(message):
         os.remove(f"./temp/{ut}.wav")
 
 
+#誰も居なくなると自動切断
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if after.channel is None:
+        if member.id != bot.user.id:
+            if member.guild.voice_client.channel is before.channel:
+                if len(member.guild.voice_client.channel.members) == 1:
+                    await member.guild.voice_client.disconnect()
+                    await check_text_channel.send("自動切断しました")
+                    dt_now = datetime.datetime.now()
+                    print(f"[{dt_now}][INFO]自動切断しました")
+
+
 bot.run(DISCORD_TOKEN)
