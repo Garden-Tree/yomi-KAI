@@ -129,3 +129,4 @@ dmypy.json
 .pyre/
 
 tokens.py
+settings.json

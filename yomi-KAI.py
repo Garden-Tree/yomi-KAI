@@ -1,6 +1,4 @@
 import discord
-from discord import voice_client
-from discord.channel import VoiceChannel
 from discord.ext import commands
 import datetime
 import time
@@ -9,18 +7,27 @@ from voicetext import VoiceText
 import wave
 import asyncio
 from collections import defaultdict, deque
-import tokens
 import re
 import json
 import pprint
+import glob
 
-prefix = "yomi."
+
+with open("settings.json", "r") as f:
+    settings = json.load(f)
+    DISCORD_TOKEN = settings["DISCORD_TOKEN"]
+    VOICETEXT_API_KEY = settings["VOICETEXT_API_KEY"] + ":"
+    PREFIX = settings["PREFIX"]
+
 
 intents = discord.Intents.default()
 intents.members = True 
-bot = commands.Bot(command_prefix=prefix, intents=intents)
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-vt = VoiceText(tokens.VOICETEXT_API_KEY)
+
+vt = VoiceText(VOICETEXT_API_KEY)
+
+
 check_text_channel = None
 
 
@@ -44,6 +51,10 @@ def play(voice_client, queue):
     voice_client.play(source, after=lambda e:play(voice_client, queue))
 
 
+for filename in glob.glob("./temp/*.wav"):
+    os.remove(filename)
+
+
 #接続時の処理
 @bot.event
 async def on_ready():
@@ -57,10 +68,10 @@ bot.remove_command('help')
 @bot.command()
 async def help(ctx):
     embed = discord.Embed(title="yomi-KAI", description="テキスト読み上げbotです。", inline="false")
-    embed.add_field(name=f"{prefix}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
-    embed.add_field(name=f"{prefix}dc", value="ボイスチャンネルから切断します。", inline="false")
-    embed.add_field(name=f"{prefix}dict", value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。", inline="false")
-    embed.add_field(name=f"{prefix}help", value="このヘルプを表示します。", inline="false")
+    embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
+    embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
+    embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
+    embed.add_field(name=f"{PREFIX}help", value="このヘルプを表示します。", inline="false")
     await ctx.send(embed=embed)
 
 #ボイスチャンネルに接続
@@ -114,7 +125,7 @@ async def dict(ctx, *args):
         word[args[1]] = args[2]
         with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
             f.write(json.dumps(word, indent=2, ensure_ascii=False))
-        await ctx.channel.send(f"辞書に{args[1]}を{args[2]}として登録しました")
+        await ctx.channel.send(f"辞書に`{args[1]}`を`{args[2]}`として登録しました")
         dt_now = datetime.datetime.now()
         print(f"[{dt_now}][INFO]辞書に{args[1]}を{args[2]}として登録しました")
         return
@@ -123,7 +134,7 @@ async def dict(ctx, *args):
         del word[args[1]]
         with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
             f.write(json.dumps(word, indent=2, ensure_ascii=False))
-        await ctx.channel.send(f"辞書から{args[1]}を削除しました")
+        await ctx.channel.send(f"辞書から`{args[1]}`を削除しました")
         dt_now = datetime.datetime.now()
         print(f"[{dt_now}][INFO]辞書から{args[1]}を削除しました")
         return
@@ -137,23 +148,23 @@ async def dict(ctx, *args):
 
     if args[0] == "help" and len(args) == 1:
         embed = discord.Embed(title="辞書機能ヘルプ", description="辞書機能のヘルプです。", inline="false")
-        embed.add_field(name=f"{prefix}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
-        embed.add_field(name=f"{prefix}dict del `word`", value="`word`を辞書から削除します。", inline="false")
-        embed.add_field(name=f"{prefix}dict list", value="現在登録されている辞書を表示します。", inline="false")
-        embed.add_field(name=f"{prefix}dict help", value="このヘルプを表示します。", inline="false")
+        embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
+        embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
+        embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
+        embed.add_field(name=f"{PREFIX}dict help", value="このヘルプを表示します。", inline="false")
         await ctx.send(embed=embed)
 
     else:
-        await ctx.channel.send(f"コマンドが間違っています。`{prefix}dict help`を参照してください")
+        await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
         dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]コマンドが間違っています。`{prefix}dict help`を参照してください")
+        print(f"[{dt_now}][INFO]コマンドが間違っています。`{PREFIX}dict help`を参照してください")
 
 
 #メッセージが送られた時
 @bot.event
 async def on_message(message):
     #コマンドをコマンドとしてトリガーし、読み上げから除外
-    if message.content.startswith(prefix):
+    if message.content.startswith(PREFIX):
         await bot.process_commands(message)
         return
 
@@ -207,4 +218,17 @@ async def on_message(message):
         os.remove(f"./temp/{ut}.wav")
 
 
-bot.run(tokens.DISCORD_TOKEN)
+#誰も居なくなると自動切断
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if after.channel is None:
+        if member.id != bot.user.id:
+            if member.guild.voice_client.channel is before.channel:
+                if len(member.guild.voice_client.channel.members) == 1:
+                    await member.guild.voice_client.disconnect()
+                    await check_text_channel.send("自動切断しました")
+                    dt_now = datetime.datetime.now()
+                    print(f"[{dt_now}][INFO]自動切断しました")
+
+
+bot.run(DISCORD_TOKEN)
