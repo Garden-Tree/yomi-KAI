@@ -210,7 +210,7 @@ async def on_message(message):
 
         #音声ファイル削除
         with wave.open(f"./temp/{ut}.wav", "rb")as f:
-            wave_length=(f.getnframes() / f.getframerate()) #再生時間                
+            wave_length=(f.getnframes() / f.getframerate()) #再生時間 
         dt_now = datetime.datetime.now()
         print(f"[{dt_now}][INFO]PlayTime:{wave_length}")
         await asyncio.sleep(wave_length + 5)

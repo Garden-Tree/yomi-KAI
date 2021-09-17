@@ -38,6 +38,11 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ### yomi.help
 このヘルプを表示します。
 
+## 機能
+- 辞書
+- プレフィックスの変更
+- 自動切断
+
 ## 注意
 - `PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をダウンロードして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio19-dev`をyumやaptでインストールしてください。
 - DiscordのBot設定の`Privileged Gateway Intents`の権限が必要です。[Discord Developer Portal](https://discord.com/developers/applications)から権限を付与してください。
