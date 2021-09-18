@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import datetime
+from datetime import datetime
 import time
 import os
 from voicetext import VoiceText
@@ -11,7 +11,24 @@ import re
 import json
 import pprint
 import glob
+from logging import StreamHandler, FileHandler, Formatter, basicConfig, getLogger, INFO, DEBUG, NOTSET
 
+# ストリームハンドラの設定
+sh = StreamHandler()
+sh.setLevel(INFO)
+sh.setFormatter(Formatter("[%(asctime)s] %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s"))
+
+# 保存先の有無チェック
+if not os.path.isdir('./log'):
+    os.makedirs('./log', exist_ok=True)
+
+fh = FileHandler(f"./log/{datetime.now():%Y-%m-%d_%H%M%S}.log", encoding="utf-8")
+fh.setLevel(DEBUG)
+fh.setFormatter(Formatter("[%(asctime)s] %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s"))
+
+# ルートロガーの設定
+basicConfig(level=NOTSET, handlers=[sh, fh])
+logger = getLogger(__name__)
 
 with open("settings.json", "r") as f:
     settings = json.load(f)
@@ -19,23 +36,15 @@ with open("settings.json", "r") as f:
     VOICETEXT_API_KEY = settings["VOICETEXT_API_KEY"] + ":"
     PREFIX = settings["PREFIX"]
 
-
 intents = discord.Intents.default()
 intents.members = True 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
-
 vt = VoiceText(VOICETEXT_API_KEY)
-
 
 check_text_channel = None
 
-
-def mention(Text):
-    P = "<@!?([0-9]+)>" #パターン
-    return re.findall(P,Text) #メンションからユーザーIDの抜き出し
-
-
+#キュー
 queue_dict = defaultdict(deque)
 
 def enqueue(voice_client, guild, source):
@@ -50,16 +59,20 @@ def play(voice_client, queue):
     source = queue.popleft()
     voice_client.play(source, after=lambda e:play(voice_client, queue))
 
-
+#起動時に./temp内の*.wavをすべて削除
 for filename in glob.glob("./temp/*.wav"):
     os.remove(filename)
 
+#ログを10個残す
+file_list = glob.glob("./log/*.log")
+if len(file_list) > 10:
+    for i in range(len(file_list)-10):
+        os.remove(file_list[i])
 
 #接続時の処理
 @bot.event
 async def on_ready():
-    dt_now = datetime.datetime.now()
-    print(f"[{dt_now}][INFO]Launch complete! Logged in as {bot.user.name}.")
+    logger.info(f"Launch complete! Logged in as {bot.user.name}.")
 
 #もとからあるhelpコマンドを無効化
 bot.remove_command('help')
@@ -73,14 +86,14 @@ async def help(ctx):
     embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
     embed.add_field(name=f"{PREFIX}help", value="このヘルプを表示します。", inline="false")
     await ctx.send(embed=embed)
+    logger.info("helpを表示")
 
 #ボイスチャンネルに接続
 @bot.command()
 async def c(ctx):
     if ctx.author.voice is None:
         await ctx.channel.send(f"{ctx.author.mention}さんはボイスチャンネルに接続していません")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]{ctx.author}さんはボイスチャンネルに接続していません")
+        logger.info(f"{ctx.author}さんはボイスチャンネルに接続していません")
         return
 
     global check_text_channel
@@ -89,30 +102,27 @@ async def c(ctx):
         await ctx.guild.voice_client.move_to(ctx.author.voice.channel)
         check_text_channel = ctx.channel
         await ctx.channel.send(f"{ctx.author.voice.channel.name}に接続しました")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]{ctx.author.voice.channel.name}に接続しました")
+        logger.info(f"{ctx.author.voice.channel.name}に接続しました")
         return
 
     await ctx.author.voice.channel.connect()
     check_text_channel = ctx.channel
     await ctx.channel.send(f"{ctx.author.voice.channel.name}に接続しました")
-    dt_now = datetime.datetime.now()
-    print(f"[{dt_now}][INFO]{ctx.author.voice.channel.name}に接続しました")
+    logger.info(f"{ctx.author.voice.channel.name}に接続しました")
 
 #ボイスチャンネルから切断
 @bot.command()
 async def dc(ctx):
     if ctx.guild.voice_client is None:
         await ctx.channel.send("ボイスチャンネルに接続していません")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]ボイスチャンネルに接続していません")
+        logger.info(f"ボイスチャンネルに接続していません")
         return
 
     await ctx.guild.voice_client.disconnect()
     await ctx.channel.send("切断しました")
-    dt_now = datetime.datetime.now()
-    print(f"[{dt_now}][INFO]切断しました")
+    logger.info(f"切断しました")
 
+#辞書
 @bot.command()
 async def dict(ctx, *args):
     if os.path.isfile(f"./dict/{ctx.guild.id}.json") == True:
@@ -126,8 +136,7 @@ async def dict(ctx, *args):
         with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
             f.write(json.dumps(word, indent=2, ensure_ascii=False))
         await ctx.channel.send(f"辞書に`{args[1]}`を`{args[2]}`として登録しました")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]辞書に{args[1]}を{args[2]}として登録しました")
+        logger.info(f"辞書に{args[1]}を{args[2]}として登録しました")
         return
 
     if args[0] == "del" and len(args) == 2:
@@ -135,14 +144,12 @@ async def dict(ctx, *args):
         with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
             f.write(json.dumps(word, indent=2, ensure_ascii=False))
         await ctx.channel.send(f"辞書から`{args[1]}`を削除しました")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]辞書から{args[1]}を削除しました")
+        logger.info(f"辞書から{args[1]}を削除しました")
         return
 
     if args[0] == "list" and len(args) == 1:
         await ctx.channel.send("辞書を表示します")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]辞書を表示します")
+        logger.info(f"辞書を表示します")
         await ctx.channel.send(pprint.pformat(word, depth=1))
         return
 
@@ -153,12 +160,12 @@ async def dict(ctx, *args):
         embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
         embed.add_field(name=f"{PREFIX}dict help", value="このヘルプを表示します。", inline="false")
         await ctx.send(embed=embed)
+        logger.info("dict.helpを表示")
+        return
 
     else:
         await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]コマンドが間違っています。`{PREFIX}dict help`を参照してください")
-
+        logger.info(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
 
 #メッセージが送られた時
 @bot.event
@@ -178,14 +185,14 @@ async def on_message(message):
         read_msg = re.sub(r"https?://.*", "URL", message.content)
 
         #メンション置換
-        if "<@" and ">" in message.content: #メンションがあった場合実行
-            Temp = mention(message.content)
-            for i in range(len(Temp)): #返り値(リスト型)の回数ループ
-                Temp[i] = int(Temp[i]) #返り値のデータをstrからintに変換
-            for i in range(len(Temp)): #返り値(リスト型)の(ry
-                user = re.sub(r"#\d{4}", "", str(bot.get_user(Temp[i]))) #ユーザー情報取得
-                read_msg = "アット" + re.sub("<@!?[0-9]+>", user, read_msg) 
-        
+        if "<@" and ">" in message.content:
+            P = "<@!?([0-9]+)>" #パターン
+            Temp = re.findall(P, message.content)
+            for i in range(len(Temp)):
+                Temp[i] = int(Temp[i])
+                user = message.guild.get_member(Temp[i])
+                read_msg = re.sub(f"<@!?{Temp[i]}>", "アット" + user.display_name, read_msg)
+
         #辞書置換
         if os.path.isfile(f"./dict/{message.guild.id}.json") == True:
             with open(f"./dict/{message.guild.id}.json", "r", encoding="UTF-8")as f:
@@ -195,40 +202,31 @@ async def on_message(message):
             for i, one_dic in enumerate(word.items()): # one_dicは単語と読みのタプル。添字はそれぞれ0と1。
                 read_msg = read_msg.replace(one_dic[0], '{'+str(i)+'}')
                 read_list.append(one_dic[1]) # 変換が発生した順に読みがなリストに追加
-
             read_msg = read_msg.format(*read_list) #読み仮名リストを引数にとる
 
         #音声ファイル作成
-        ut = time.time()
-        with open(f"./temp/{ut}.wav","wb") as f:
+        gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        with open(f"./temp/{gen_time}.wav","wb") as f:
             f.write(vt.speed(120).to_wave(read_msg))
 
         #音声読み上げ
-        enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{ut}.wav"))
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]ReadSentence:{read_msg}")
+        enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav"))
+        logger.info(f"ReadSentence:{read_msg}")
 
         #音声ファイル削除
-        with wave.open(f"./temp/{ut}.wav", "rb")as f:
+        with wave.open(f"./temp/{gen_time}.wav", "rb")as f:
             wave_length=(f.getnframes() / f.getframerate()) #再生時間 
-        dt_now = datetime.datetime.now()
-        print(f"[{dt_now}][INFO]PlayTime:{wave_length}")
+        logger.info(f"PlayTime:{wave_length}")
         await asyncio.sleep(wave_length + 5)
-        
-        os.remove(f"./temp/{ut}.wav")
 
+        os.remove(f"./temp/{gen_time}.wav")
 
 #誰も居なくなると自動切断
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if after.channel is None:
-        if member.id != bot.user.id:
-            if member.guild.voice_client.channel is before.channel:
-                if len(member.guild.voice_client.channel.members) == 1:
-                    await member.guild.voice_client.disconnect()
-                    await check_text_channel.send("自動切断しました")
-                    dt_now = datetime.datetime.now()
-                    print(f"[{dt_now}][INFO]自動切断しました")
-
+    if (member.guild.voice_client is not None and after.channel is None and member.id != bot.user.id and member.guild.voice_client.channel is before.channel and len(member.guild.voice_client.channel.members) == 1):
+        await member.guild.voice_client.disconnect()
+        await check_text_channel.send("自動切断しました")
+        logger.info(f"自動切断しました")
 
 bot.run(DISCORD_TOKEN)

@@ -20,7 +20,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 - python-voicetext
 
 ## インストール
-1. `pip3 install -r requirements.txt`を実行してライブラリをインストール。
+1. `pip install -r requirements.txt`を実行してライブラリをインストール。
 2. `settings.json.example`を開き、中にDiscordのトークンとVoiceTextのAPIキーを入力。
 3. `settings.json`で名前をつけて保存。
 
@@ -43,11 +43,18 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 - プレフィックスの変更
 - 自動切断
 
+## 設定
+`setting.json`が設定ファイルです。プレフィックスを変更することができます。
+
 ## 注意
 - `PyAudio`をインストールする際に`portaudio`が見つからないというエラーが出ることがあります。その場合、Windowsならビルド済みの`PyAudio`をダウンロードして、ローカルからpip3でインストールしてください。Linuxなら、`portaudio19-dev`をyumやaptでインストールしてください。
 - DiscordのBot設定の`Privileged Gateway Intents`の権限が必要です。[Discord Developer Portal](https://discord.com/developers/applications)から権限を付与してください。
 - 本ブログラムで使用しているライブラリである`Discord.py`の開発が終了しています。そのため今後、本ブログラムも使えなくなる可能性があります。(使えなくなった場合は、`Discord.js`などでサポートは続けるつもりです。)
 - 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は`./dict/`です。
+
+## 支援
+サーバー運営費等が毎月発生しています。皆様のご支援をお待ちしております。開発のモチベーションにも繋がります！  
+[[Fantia]](https://fantia.jp/fanclubs/254049)
 
 ## 作者
 GardenTree [[Twitter]](https://twitter.com/Garden__Tree)
