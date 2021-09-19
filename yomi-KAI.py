@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime
-import time
+import sys
 import os
 from voicetext import VoiceText
 import wave
@@ -30,17 +30,33 @@ fh.setFormatter(Formatter("[%(asctime)s] %(name)s:%(lineno)s %(funcName)s [%(lev
 basicConfig(level=NOTSET, handlers=[sh, fh])
 logger = getLogger(__name__)
 
-with open("settings.json", "r") as f:
-    settings = json.load(f)
-    DISCORD_TOKEN = settings["DISCORD_TOKEN"]
-    VOICETEXT_API_KEY = settings["VOICETEXT_API_KEY"] + ":"
-    PREFIX = settings["PREFIX"]
+#起動時に./temp内の*.wavをすべて削除
+for filename in glob.glob("./temp/*.wav"):
+    os.remove(filename)
 
-intents = discord.Intents.default()
-intents.members = True 
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+#ログを10個残す
+file_list = glob.glob("./log/*.log")
+if len(file_list) > 10:
+    for i in range(len(file_list)-10):
+        os.remove(file_list[i])
 
-vt = VoiceText(VOICETEXT_API_KEY)
+#setting.jsonの確認
+try:
+    with open("settings.json", "r", encoding="UTF-8") as f:
+        settings = json.load(f)
+        DISCORD_TOKEN = settings["DISCORD_TOKEN"]
+        VOICETEXT_API_KEY = settings["VOICETEXT_API_KEY"] + ":"
+        PREFIX = settings["PREFIX"]
+except:
+    logger.exception("setting.jsonが見つかりません。")
+    sys.exit()
+
+#VOICECETEXT_API_KEYの確認
+try:
+    vt = VoiceText(VOICETEXT_API_KEY)
+except:
+    logger.exception("VOICETEXT_API_KEYが不適切です。")
+    sys.exit()
 
 check_text_channel = None
 
@@ -59,20 +75,14 @@ def play(voice_client, queue):
     source = queue.popleft()
     voice_client.play(source, after=lambda e:play(voice_client, queue))
 
-#起動時に./temp内の*.wavをすべて削除
-for filename in glob.glob("./temp/*.wav"):
-    os.remove(filename)
-
-#ログを10個残す
-file_list = glob.glob("./log/*.log")
-if len(file_list) > 10:
-    for i in range(len(file_list)-10):
-        os.remove(file_list[i])
+intents = discord.Intents.default()
+intents.members = True 
+bot = commands.Bot(command_prefix=PREFIX, intents=intents)
 
 #接続時の処理
 @bot.event
 async def on_ready():
-    logger.info(f"Launch complete! Logged in as {bot.user.name}.")
+    logger.info(f"Launch complete! Logged in as [{bot.user.name}]. PREFIX is [{PREFIX}].")
 
 #もとからあるhelpコマンドを無効化
 bot.remove_command('help')
@@ -206,7 +216,7 @@ async def on_message(message):
 
         #音声ファイル作成
         gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        with open(f"./temp/{gen_time}.wav","wb") as f:
+        with open(f"./temp/{gen_time}.wav","wb", encoding="UTF-8") as f:
             f.write(vt.speed(120).to_wave(read_msg))
 
         #音声読み上げ
@@ -217,7 +227,7 @@ async def on_message(message):
         with wave.open(f"./temp/{gen_time}.wav", "rb")as f:
             wave_length=(f.getnframes() / f.getframerate()) #再生時間 
         logger.info(f"PlayTime:{wave_length}")
-        await asyncio.sleep(wave_length + 5)
+        await asyncio.sleep(wave_length + 10)
 
         os.remove(f"./temp/{gen_time}.wav")
 
@@ -229,4 +239,8 @@ async def on_voice_state_update(member, before, after):
         await check_text_channel.send("自動切断しました")
         logger.info(f"自動切断しました")
 
-bot.run(DISCORD_TOKEN)
+try:
+    bot.run(DISCORD_TOKEN)
+except:
+    logger.exception("DISCORD_TOKENが不適切です。")
+    sys.exit()
