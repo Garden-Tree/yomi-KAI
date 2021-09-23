@@ -95,7 +95,7 @@ bot.remove_command('help')
 # ヘルプコマンド
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="yomi-KAI", description="テキスト読み上げbotです。", inline="false")
+    embed = discord.Embed(title="yomi-KAI", description="テキスト読み上げbotです。", inline="false", color=0x3399cc)
     embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
     embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
     embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
@@ -169,7 +169,7 @@ async def dict(ctx, *args):
         return
 
     if args[0] == "help" and len(args) == 1:
-        embed = discord.Embed(title="辞書機能ヘルプ", description="辞書機能のヘルプです。", inline="false")
+        embed = discord.Embed(title="辞書機能ヘルプ", description="辞書機能のヘルプです。", inline="false", color=0x3399cc)
         embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
         embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
         embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
