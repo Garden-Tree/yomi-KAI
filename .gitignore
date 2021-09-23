@@ -133,3 +133,8 @@ settings.json
 dict/
 log/
 temp/
+python-3.9.7-embed-amd64/
+build.bat
+windows-run.bat
+linux-run.sh
+yomi-KAI-v/
