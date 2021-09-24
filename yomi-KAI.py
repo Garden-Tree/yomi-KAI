@@ -58,7 +58,7 @@ try:
         PITCH = settings["PITCH"]
         SPEED = settings["SPEED"]
 except:
-    logger.exception("setting.jsonが見つかりません。")
+    logger.exception("settings.jsonが見つかりません。")
     sys.exit()
 
 # VOICECETEXT_API_KEYの確認
