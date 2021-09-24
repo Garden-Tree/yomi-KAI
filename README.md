@@ -21,7 +21,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ## 環境
 
 - Python 3.9 以上
-- ffmpeg 4.4 以上
+- FFmpeg 4.4 以上
 
 ## 依存ライブラリ
 
@@ -30,10 +30,10 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 導入方法
 
-1. [Discord Developer Portal](https://discord.com/developers/applications)をからbotを作成し、`Privileged Gateway Intents`の権限をすべて付与。
+1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、`Privileged Gateway Intents`の権限をすべて付与。
 1. [VoiceText Web API](https://cloud.voicetext.jp/webapi)に登録し、APIキーを受け取る。
 1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から`yomi-KAI-v***.zip`をダウンロードして解凍。
-1. `settings.json.example`を開き、DiscordのトークンとVoiceTextのAPIキーを入力。(プレフィックスもここから変更可能。)
+1. `settings.json.example`を開き、DiscordのトークンとVoiceTextのAPIキーを入力。
 1. `settings.json`で名前をつけて保存。
 
 ## 起動方法
@@ -72,12 +72,13 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 設定
 
-`setting.json`が設定ファイルです。プレフィックスを変更することができます。
+`settings.json`が設定ファイルです。プレフィックスや声質、ピッチ、スピードを変更することができます。
 
-## 注意
+## 補足
 
 - 本ブログラムで使用しているライブラリである`Discord.py`の開発が終了しています。そのため今後、本ブログラムも使えなくなる可能性があります。(使えなくなった場合は、`Discord.js`などでサポートは続けるつもりです。)
 - 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は`./dict/`です。
+- PythonとFFmpegの環境が用意できる場合はソースコードのみでも実行できます。
 
 ## 支援
 

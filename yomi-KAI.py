@@ -48,10 +48,15 @@ if len(file_list) > 10:
 # setting.jsonの確認
 try:
     with open("settings.json", "r", encoding="UTF-8") as f:
-        settings = json.load(f)
+        content = f.read()
+        re_content = re.sub(r"/\*[\s\S]*?\*/|//.*", "", content) # コメントを正規表現で削除
+        settings = json.loads(re_content)
         DISCORD_TOKEN = settings["DISCORD_TOKEN"]
         VOICETEXT_API_KEY = settings["VOICETEXT_API_KEY"] + ":"
         PREFIX = settings["PREFIX"]
+        SPEAKER = settings["SPEAKER"]
+        PITCH = settings["PITCH"]
+        SPEED = settings["SPEED"]
 except:
     logger.exception("setting.jsonが見つかりません。")
     sys.exit()
@@ -63,7 +68,7 @@ except:
     logger.exception("VOICETEXT_API_KEYが不適切です。")
     sys.exit()
 
-check_text_channel = None
+connected_channel = {}
 
 # キュー
 queue_dict = defaultdict(deque)
@@ -95,7 +100,7 @@ bot.remove_command('help')
 # ヘルプコマンド
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="yomi-KAI", description="テキスト読み上げbotです。", inline="false", color=0x3399cc)
+    embed = discord.Embed(title="yomi-KAI", inline="false", color=0x3399cc)
     embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
     embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
     embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
@@ -105,25 +110,31 @@ async def help(ctx):
 
 # ボイスチャンネルに接続
 @bot.command()
-async def c(ctx):
+async def c(ctx, *args):
     if ctx.author.voice is None:
         await ctx.channel.send(f"{ctx.author.mention}さんはボイスチャンネルに接続していません")
         logger.info(f"{ctx.author}さんはボイスチャンネルに接続していません")
         return
 
-    global check_text_channel
+    global connected_channel
 
     if ctx.guild.voice_client is not None:
         await ctx.guild.voice_client.move_to(ctx.author.voice.channel)
-        check_text_channel = ctx.channel
-        await ctx.channel.send(f"{ctx.author.voice.channel.name}に接続しました")
+        embed = discord.Embed(title="読み上げ開始", inline="false", color=0x3399cc)
+        embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline="false")
+        embed.add_field(name="ボイスチャンネル", value=f"{ctx.author.voice.channel.name}", inline="false")
+        await ctx.send(embed=embed)
         logger.info(f"{ctx.author.voice.channel.name}に接続しました")
+        connected_channel[ctx.guild] = ctx.channel
         return
 
     await ctx.author.voice.channel.connect()
-    check_text_channel = ctx.channel
-    await ctx.channel.send(f"{ctx.author.voice.channel.name}に接続しました")
+    embed = discord.Embed(title="読み上げ開始", inline="false", color=0x3399cc)
+    embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline="false")
+    embed.add_field(name="ボイスチャンネル", value=f"{ctx.author.voice.channel.name}", inline="false")
+    await ctx.send(embed=embed)
     logger.info(f"{ctx.author.voice.channel.name}に接続しました")
+    connected_channel[ctx.guild] = ctx.channel
 
 # ボイスチャンネルから切断
 @bot.command()
@@ -136,6 +147,7 @@ async def dc(ctx):
     await ctx.guild.voice_client.disconnect()
     await ctx.channel.send("切断しました")
     logger.info(f"切断しました")
+    connected_channel.pop(ctx.guild)
 
 # 辞書
 @bot.command()
@@ -169,7 +181,7 @@ async def dict(ctx, *args):
         return
 
     if args[0] == "help" and len(args) == 1:
-        embed = discord.Embed(title="辞書機能ヘルプ", description="辞書機能のヘルプです。", inline="false", color=0x3399cc)
+        embed = discord.Embed(title="辞書機能ヘルプ", inline="false", color=0x3399cc)
         embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
         embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
         embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
@@ -195,7 +207,7 @@ async def on_message(message):
         return
 
     # 読み上げ
-    if message.channel == check_text_channel and message.guild.voice_client is not None:
+    if message.channel in connected_channel.values() and message.guild.voice_client is not None:
         read_msg = message.content
 
         # 辞書置換
@@ -225,7 +237,7 @@ async def on_message(message):
         # 音声ファイル作成
         gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         with open(f"./temp/{gen_time}.wav","wb") as f:
-            f.write(vt.speed(120).to_wave(read_msg))
+            f.write(vt.speaker(SPEAKER).pitch(PITCH).speed(SPEED).to_wave(read_msg))
 
         # 音声読み上げ
         enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav"))
@@ -235,7 +247,7 @@ async def on_message(message):
         with wave.open(f"./temp/{gen_time}.wav", "rb")as f:
             wave_length=(f.getnframes() / f.getframerate()) # 再生時間 
         logger.info(f"PlayTime:{wave_length}")
-        await asyncio.sleep(wave_length + 10)
+        await asyncio.sleep(wave_length + 30)
 
         os.remove(f"./temp/{gen_time}.wav")
 
@@ -244,8 +256,9 @@ async def on_message(message):
 async def on_voice_state_update(member, before, after):
     if (member.guild.voice_client is not None and member.id != bot.user.id and member.guild.voice_client.channel is before.channel and len(member.guild.voice_client.channel.members) == 1):
         await member.guild.voice_client.disconnect()
-        await check_text_channel.send("自動切断しました")
+        await connected_channel[member.guild].send("自動切断しました")
         logger.info(f"自動切断しました")
+        connected_channel.pop(member.guild)
 
 try:
     bot.run(DISCORD_TOKEN)
