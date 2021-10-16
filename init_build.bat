@@ -1,1 +1,0 @@
-powershell -NoProfile -ExecutionPolicy Unrestricted init_build.ps1
