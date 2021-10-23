@@ -8,15 +8,12 @@
 
 ## 概要
 
-yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイスチャンネルで読み上げるbotです。
+yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイスチャンネルで読み上げるbotです。  
+自分のPC上で実行できるため、他の公開されている読み上げbotと比べて**負荷が集中しにくく、安定して動作**します。
 
 ## デモ
 
 準備中
-
-## 特徴
-
-自分のPC上で実行できるため、他の公開されている読み上げbotと比べて負荷が集中しにくく、安定して動作します。
 
 ## 環境
 
@@ -30,21 +27,29 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 導入方法
 
-1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、`Privileged Gateway Intents`の権限をすべて付与。
+### Windows
+
+1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与。
 1. [VoiceText Web API](https://cloud.voicetext.jp/webapi)に登録し、APIキーを受け取る。
-1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から`yomi-KAI-v***.zip`をダウンロードして解凍。
-1. `settings.json.example`を開き、DiscordのトークンとVoiceTextのAPIキーを入力。
-1. `settings.json`で名前をつけて保存。
+1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から `yomi-KAI-v***.zip` をダウンロードして解凍。
+1. `settings.json.example` を開き、DiscordのトークンとVoiceTextのAPIキーを入力。
+1. `settings.json` で名前をつけて保存。
+
+### Linux
+
+1. Windowsの2. まで同じ
+1. Python, FFmpegをインストール
+1. Pythonに `requirements.txt` のライブラリをインストール
 
 ## 起動方法
 
 ### Windows
 
-`windows-run.bat`
+`windows-run.bat` を実行。
 
 ### Linux
 
-`linux-run.sh`
+`yomi-KAI.py` を実行。
 
 ## コマンド
 
@@ -72,13 +77,22 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 設定
 
-`settings.json`が設定ファイルです。プレフィックスや声質、ピッチ、スピードを変更することができます。
+`settings.json` から設定を変更できます。現在設定可能な項目は以下の通りです。
+
+- プレフィックス
+- 話者(声質)
+- ピッチ
+- スピード
 
 ## 補足
 
-- 本ブログラムで使用しているライブラリである`Discord.py`の開発が終了しています。そのため今後、本ブログラムも使えなくなる可能性があります。(使えなくなった場合は、`Discord.js`などでサポートは続けるつもりです。)
-- 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は`./dict/`です。
-- PythonとFFmpegの環境が用意できる場合はソースコードのみでも実行できます。
+- 本ブログラムで使用しているライブラリである `Discord.py` の開発が終了しています。そのため今後、本ブログラムも使えなくなる可能性があります。(使えなくなった場合は、 `Discord.js` などでサポートは続けるつもりです。)
+- 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は `./dict/` です。
+- PythonとFFmpegの環境が用意できる場合、必要なライブラリをインストールすればソースコードのみでも実行できます。
+
+## サポート
+
+サポートサーバーは[こちら](https://discord.gg/DWEQ2cP3KZ)。要望や質問はこのDiscordサーバーで受け付けています。**試用もできます。**
 
 ## 支援
 
