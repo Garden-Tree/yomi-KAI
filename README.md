@@ -41,7 +41,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ### Linux
 
-`linux-run.sh` を実行。
+`yomi-KAI.py`を実行。
 
 ## コマンド
 
