@@ -6,13 +6,12 @@ $data | Out-String | ForEach-Object { [Text.Encoding]::UTF8.GetBytes($_) } | Set
 Invoke-WebRequest "https://bootstrap.pypa.io/get-pip.py" -OutFile "get-pip.py"
 .\python.exe .\get-pip.py
 .\python.exe -m pip install discord.py[voice]
-Invoke-WebRequest "https://download.lfd.uci.edu/pythonlibs/y2rycu7g/PyAudio-0.2.11-cp39-cp39-win_amd64.whl" -OutFile "PyAudio-0.2.11-cp39-cp39-win_amd64.whl"
-.\python.exe -m pip install PyAudio-0.2.11-cp39-cp39-win_amd64.whl
+.\python.exe -m pip install ..\PyAudio-0.2.11-cp39-cp39-win_amd64.whl
 .\python.exe -m pip install python-voicetext
 Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/4.4/ffmpeg-4.4-essentials_build.zip" -OutFile "ffmpeg-4.4-essentials_build.zip"
 Expand-Archive ffmpeg-4.4-essentials_build.zip
 move-item ffmpeg-4.4-essentials_build\ffmpeg-4.4-essentials_build\bin\ffmpeg.exe .\
-remove-item -Recurse get-pip.py, PyAudio-0.2.11-cp39-cp39-win_amd64.whl, ffmpeg-4.4-essentials_build.zip, ffmpeg-4.4-essentials_build
+remove-item -Recurse get-pip.py, ffmpeg-4.4-essentials_build.zip, ffmpeg-4.4-essentials_build
 Set-Location ..\
-remove-item python-3.9.7-embed-amd64.zip
+remove-item python-3.9.7-embed-amd64.zip, PyAudio-0.2.11-cp39-cp39-win_amd64.whl
 Write-Output "`nEnvironment installation compleated!"
