@@ -100,17 +100,17 @@ bot.remove_command('help')
 # ヘルプコマンド
 @bot.command()
 async def help(ctx):
-    embed = discord.Embed(title="yomi-KAI", inline="false", color=0x3399cc)
-    embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
-    embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
-    embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
-    embed.add_field(name=f"{PREFIX}help", value="このヘルプを表示します。", inline="false")
-    await ctx.send(embed=embed)
+    help_embed = discord.Embed(title="yomi-KAI", inline="false", color=0x3399cc)
+    help_embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
+    help_embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
+    help_embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
+    help_embed.add_field(name=f"{PREFIX}help", value="このヘルプを表示します。", inline="false")
+    await ctx.send(embed=help_embed)
     logger.info("helpを表示")
 
 # ボイスチャンネルに接続
 @bot.command()
-async def c(ctx, *args):
+async def c(ctx):
     if ctx.author.voice is None:
         await ctx.channel.send(f"{ctx.author.mention}さんはボイスチャンネルに接続していません")
         logger.info(f"{ctx.author}さんはボイスチャンネルに接続していません")
@@ -118,23 +118,21 @@ async def c(ctx, *args):
 
     global connected_channel
 
-    if ctx.guild.voice_client is not None:
-        await ctx.guild.voice_client.move_to(ctx.author.voice.channel)
-        embed = discord.Embed(title="読み上げ開始", inline="false", color=0x3399cc)
-        embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline="false")
-        embed.add_field(name="ボイスチャンネル", value=f"{ctx.author.voice.channel.name}", inline="false")
-        await ctx.send(embed=embed)
+    async def connect(ctx):
+        connected_embed = discord.Embed(title="読み上げ開始", inline="false", color=0x3399cc)
+        connected_embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline="false")
+        connected_embed.add_field(name="ボイスチャンネル", value=f"{ctx.author.voice.channel.name}", inline="false")
+        await ctx.send(embed=connected_embed)
         logger.info(f"{ctx.author.voice.channel.name}に接続しました")
         connected_channel[ctx.guild] = ctx.channel
+
+    if ctx.guild.voice_client is not None:
+        await ctx.guild.voice_client.move_to(ctx.author.voice.channel)
+        await connect(ctx)
         return
 
     await ctx.author.voice.channel.connect()
-    embed = discord.Embed(title="読み上げ開始", inline="false", color=0x3399cc)
-    embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline="false")
-    embed.add_field(name="ボイスチャンネル", value=f"{ctx.author.voice.channel.name}", inline="false")
-    await ctx.send(embed=embed)
-    logger.info(f"{ctx.author.voice.channel.name}に接続しました")
-    connected_channel[ctx.guild] = ctx.channel
+    await connect(ctx)
 
 # ボイスチャンネルから切断
 @bot.command()
@@ -158,37 +156,46 @@ async def dict(ctx, *args):
     else:
         word = {}
 
-    if args[0] == "add" and len(args) == 3:
-        word[args[1]] = args[2]
-        with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
-            f.write(json.dumps(word, indent=2, ensure_ascii=False))
-        await ctx.channel.send(f"辞書に`{args[1]}`を`{args[2]}`として登録しました")
-        logger.info(f"辞書に{args[1]}を{args[2]}として登録しました")
-        return
+    if len(args) > 0:
 
-    if args[0] == "del" and len(args) == 2:
-        del word[args[1]]
-        with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
-            f.write(json.dumps(word, indent=2, ensure_ascii=False))
-        await ctx.channel.send(f"辞書から`{args[1]}`を削除しました")
-        logger.info(f"辞書から{args[1]}を削除しました")
-        return
+        if args[0] == "add" and len(args) == 3:
+            word[args[1]] = args[2]
+            with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
+                f.write(json.dumps(word, indent=2, ensure_ascii=False))
+            dict_add_embed = discord.Embed(title="辞書追加", inline="true", color=0x3399cc)
+            dict_add_embed.add_field(name="単語", value=f"{args[1]}", inline="false")
+            dict_add_embed.add_field(name="読み", value=f"{args[2]}", inline="false")
+            await ctx.send(embed=dict_add_embed)
+            logger.info(f"辞書に{args[1]}を{args[2]}として追加しました")
+            return
 
-    if args[0] == "list" and len(args) == 1:
-        await ctx.channel.send("辞書を表示します")
-        logger.info(f"辞書を表示します")
-        await ctx.channel.send(pprint.pformat(word, depth=1))
-        return
+        if args[0] == "del" and len(args) == 2:
+            del word[args[1]]
+            with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
+                f.write(json.dumps(word, indent=2, ensure_ascii=False))
+            await ctx.channel.send(f"辞書から`{args[1]}`を削除しました")
+            logger.info(f"辞書から{args[1]}を削除しました")
+            return
 
-    if args[0] == "help" and len(args) == 1:
-        embed = discord.Embed(title="辞書機能ヘルプ", inline="false", color=0x3399cc)
-        embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
-        embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
-        embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
-        embed.add_field(name=f"{PREFIX}dict help", value="このヘルプを表示します。", inline="false")
-        await ctx.send(embed=embed)
-        logger.info("dict.helpを表示")
-        return
+        if args[0] == "list" and len(args) == 1:
+            await ctx.channel.send("辞書を表示します")
+            logger.info(f"辞書を表示します")
+            await ctx.channel.send("```" + pprint.pformat(word, depth=1) + "```")
+            return
+
+        if args[0] == "help" and len(args) == 1:
+            dict_help_embed = discord.Embed(title="辞書機能ヘルプ", inline="false", color=0x3399cc)
+            dict_help_embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
+            dict_help_embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
+            dict_help_embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
+            dict_help_embed.add_field(name=f"{PREFIX}dict help", value="このヘルプを表示します。", inline="false")
+            await ctx.send(embed=dict_help_embed)
+            logger.info("dict.helpを表示")
+            return
+
+        else:
+            await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
+            logger.info(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
 
     else:
         await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
