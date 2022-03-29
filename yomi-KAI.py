@@ -1,17 +1,19 @@
+import asyncio
+import glob
+import json
+import os
+import pprint
+import re
+import sys
+import wave
+from collections import defaultdict, deque
+from datetime import datetime
+from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
+                     StreamHandler, basicConfig, getLogger)
+
 import discord
 from discord.ext import commands
-from datetime import datetime
-import sys
-import os
 from voicetext import VoiceText
-import wave
-import asyncio
-from collections import defaultdict, deque
-import re
-import json
-import pprint
-import glob
-from logging import StreamHandler, FileHandler, Formatter, basicConfig, getLogger, INFO, DEBUG, NOTSET
 
 # ディレクトリ作成
 if not os.path.isdir("dict"):
@@ -217,6 +219,9 @@ async def on_message(message):
     if message.channel in connected_channel.values() and message.guild.voice_client is not None:
         read_msg = message.content
 
+        # debug
+        #print(read_msg)
+
         # 辞書置換
         if os.path.isfile(f"./dict/{message.guild.id}.json") == True:
             with open(f"./dict/{message.guild.id}.json", "r", encoding="UTF-8")as f:
@@ -240,6 +245,9 @@ async def on_message(message):
                 Temp[i] = int(Temp[i])
                 user = message.guild.get_member(Temp[i])
                 read_msg = re.sub(f"<@!?{Temp[i]}>", "アット" + user.display_name, read_msg)
+
+        # サーバー絵文字置換
+        read_msg = re.sub(r":(.*):[0-9]{18}", r"\1", read_msg)
 
         # 音声ファイル作成
         gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
