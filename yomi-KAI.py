@@ -6,6 +6,7 @@ import pprint
 import re
 import sys
 import wave
+import time
 from collections import defaultdict, deque
 from datetime import datetime
 from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
@@ -70,8 +71,6 @@ except:
     logger.exception("VOICETEXT_API_KEYが不適切です。")
     sys.exit()
 
-connected_channel = {}
-
 # キュー
 queue_dict = defaultdict(deque)
 
@@ -90,6 +89,9 @@ def play(voice_client, queue):
 intents = discord.Intents.default()
 intents.members = True 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+
+
+connected_channel = {}
 
 # 接続時の処理
 @bot.event
@@ -250,17 +252,17 @@ async def on_message(message):
         read_msg = re.sub(r":(.*):[0-9]{18}", r"\1", read_msg)
 
         # 音声ファイル作成
-        gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        gen_time = time.time()
         with open(f"./temp/{gen_time}.wav","wb") as f:
-            f.write(vt.speaker(SPEAKER).pitch(PITCH).speed(SPEED).to_wave(read_msg))
+            f.write(vt.speaker(SPEAKER).pitch(PITCH).to_wave(read_msg))
 
         # 音声読み上げ
-        enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav"))
+        enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav", options= "-af atempo=" + str(SPEED / 100)))
         logger.info(f"ReadSentence:{read_msg}")
 
         # 音声ファイル削除
         with wave.open(f"./temp/{gen_time}.wav", "rb")as f:
-            wave_length=(f.getnframes() / f.getframerate()) # 再生時間 
+            wave_length=(f.getnframes() / f.getframerate() / (SPEED / 100)) # 再生時間 
         logger.info(f"PlayTime:{wave_length}")
         await asyncio.sleep(wave_length + 30)
 
