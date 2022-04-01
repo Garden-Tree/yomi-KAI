@@ -241,6 +241,9 @@ async def on_message(message):
                 user = message.guild.get_member(Temp[i])
                 read_msg = re.sub(f"<@!?{Temp[i]}>", "アット" + user.display_name, read_msg)
 
+        # サーバー絵文字置換
+        read_msg = re.sub(r"<:(.*?):[0-9]{18}>", r"\1", read_msg)
+
         # 音声ファイル作成
         gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         with open(f"./temp/{gen_time}.wav","wb") as f:
