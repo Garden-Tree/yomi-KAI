@@ -249,7 +249,7 @@ async def on_message(message):
                 read_msg = re.sub(f"<@!?{Temp[i]}>", "アット" + user.display_name, read_msg)
 
         # サーバー絵文字置換
-        read_msg = re.sub(r":(.*):[0-9]{18}", r"\1", read_msg)
+        read_msg = re.sub(r"<:(.*?):[0-9]{18}>", r"\1", read_msg)
 
         # 音声ファイル作成
         gen_time = time.time()
