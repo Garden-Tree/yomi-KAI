@@ -1,20 +1,17 @@
-import asyncio
-import glob
-import json
-import os
-import pprint
-import re
-import sys
-import wave
-import time
-from collections import defaultdict, deque
-from datetime import datetime
-from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
-                     StreamHandler, basicConfig, getLogger)
-
 import discord
 from discord.ext import commands
+from datetime import datetime
+import sys
+import os
 from voicetext import VoiceText
+import wave
+import asyncio
+from collections import defaultdict, deque
+import re
+import json
+import pprint
+import glob
+from logging import StreamHandler, FileHandler, Formatter, basicConfig, getLogger, INFO, DEBUG, NOTSET
 
 # ディレクトリ作成
 if not os.path.isdir("dict"):
@@ -71,6 +68,8 @@ except:
     logger.exception("VOICETEXT_API_KEYが不適切です。")
     sys.exit()
 
+connected_channel = {}
+
 # キュー
 queue_dict = defaultdict(deque)
 
@@ -89,9 +88,6 @@ def play(voice_client, queue):
 intents = discord.Intents.default()
 intents.members = True 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents)
-
-
-connected_channel = {}
 
 # 接続時の処理
 @bot.event
@@ -221,9 +217,6 @@ async def on_message(message):
     if message.channel in connected_channel.values() and message.guild.voice_client is not None:
         read_msg = message.content
 
-        # debug
-        #print(read_msg)
-
         # 辞書置換
         if os.path.isfile(f"./dict/{message.guild.id}.json") == True:
             with open(f"./dict/{message.guild.id}.json", "r", encoding="UTF-8")as f:
@@ -252,17 +245,17 @@ async def on_message(message):
         read_msg = re.sub(r"<:(.*?):[0-9]{18}>", r"\1", read_msg)
 
         # 音声ファイル作成
-        gen_time = time.time()
+        gen_time = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         with open(f"./temp/{gen_time}.wav","wb") as f:
-            f.write(vt.speaker(SPEAKER).pitch(PITCH).to_wave(read_msg))
+            f.write(vt.speaker(SPEAKER).pitch(PITCH).speed(SPEED).to_wave(read_msg))
 
         # 音声読み上げ
-        enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav", options= "-af atempo=" + str(SPEED / 100)))
+        enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav"))
         logger.info(f"ReadSentence:{read_msg}")
 
         # 音声ファイル削除
         with wave.open(f"./temp/{gen_time}.wav", "rb")as f:
-            wave_length=(f.getnframes() / f.getframerate() / (SPEED / 100)) # 再生時間 
+            wave_length=(f.getnframes() / f.getframerate()) # 再生時間 
         logger.info(f"PlayTime:{wave_length}")
         await asyncio.sleep(wave_length + 30)
 
