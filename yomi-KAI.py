@@ -1,7 +1,6 @@
 import asyncio
 import glob
 import json
-from msilib.schema import Component
 import os
 import pprint
 import re
