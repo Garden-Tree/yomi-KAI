@@ -35,7 +35,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から `yomi-KAI-v***.zip` をダウンロードして解凍。
 1. `config.ini.example` を開き、DiscordのトークンVoiceTextのAPIキー、GCPのキーのディレクトリ(ファイル名も含む)を入力。
 1. `config.ini` で名前をつけて保存。
-1. `windows-setup.bat`を実行
+1. `windows_setup.bat`を実行
 
 ### Linux
 
