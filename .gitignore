@@ -129,10 +129,12 @@ dmypy.json
 .pyre/
 
 
-settings.json
+####################
+*.json
 dict/
 log/
 temp/
 python-3.9.7-embed-amd64/
 yomi-KAI-v*/
 *.zip
+*.ini
