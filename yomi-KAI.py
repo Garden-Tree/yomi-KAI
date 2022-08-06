@@ -1,12 +1,14 @@
 import asyncio
 import glob
 import json
+from msilib.schema import Component
 import os
 import pprint
 import re
 import sys
 import wave
 import time
+import configparser
 from collections import defaultdict, deque
 from datetime import datetime
 from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
@@ -14,6 +16,7 @@ from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
 
 import discord
 from discord.ext import commands
+from soupsieve import select
 from voicetext import VoiceText
 
 # ディレクトリ作成
@@ -48,20 +51,19 @@ if len(file_list) > 10:
     for i in range(len(file_list)-10):
         os.remove(file_list[i])
 
-# setting.jsonの確認
+# config.iniの確認
 try:
-    with open("settings.json", "r", encoding="UTF-8") as f:
-        content = f.read()
-        re_content = re.sub(r"/\*[\s\S]*?\*/|//.*", "", content) # コメントを正規表現で削除
-        settings = json.loads(re_content)
-        DISCORD_TOKEN = settings["DISCORD_TOKEN"]
-        VOICETEXT_API_KEY = settings["VOICETEXT_API_KEY"] + ":"
-        PREFIX = settings["PREFIX"]
-        SPEAKER = settings["SPEAKER"]
-        PITCH = settings["PITCH"]
-        SPEED = settings["SPEED"]
+    config = configparser.ConfigParser()
+    config.read("config.ini", encoding="UTF-8")
+    DISCORD_TOKEN = config["DEFAULT"]["DISCORD_TOKEN"]
+    VOICETEXT_API_KEY = config["DEFAULT"]["VOICETEXT_API_KEY"] + ":"
+    PREFIX = config["DEFAULT"]["PREFIX"]
+    SPEAKER = config["DEFAULT"]["SPEAKER"]
+    PITCH = config["DEFAULT"].getint("PITCH")
+    SPEED = config["DEFAULT"].getint("SPEED")
+    DIR = config["DEFAULT"]["CREDENTIAL_JSON_DIR"]
 except:
-    logger.exception("settings.jsonが見つかりません。")
+    logger.exception("config.iniが見つかりません。")
     sys.exit()
 
 # VOICECETEXT_API_KEYの確認
@@ -71,9 +73,11 @@ except:
     logger.exception("VOICETEXT_API_KEYが不適切です。")
     sys.exit()
 
+# 環境変数追加
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = DIR
+
 # キュー
 queue_dict = defaultdict(deque)
-
 def enqueue(voice_client, guild, source):
     queue = queue_dict[guild.id]
     queue.append(source)
@@ -86,25 +90,77 @@ def play(voice_client, queue):
     source = queue.popleft()
     voice_client.play(source, after=lambda e:play(voice_client, queue))
 
+
+# 読み上げ
+def synthesize_text(text, name, time):
+    """Synthesizes speech from the input string of text."""
+    from google.cloud import texttospeech
+    client = texttospeech.TextToSpeechClient()
+    input_text = texttospeech.SynthesisInput(text=text)
+    # Note: the voice can also be specified by name.
+    # Names of voices can be retrieved with client.list_voices().
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="ja-JP",
+        name=name,
+    )
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.LINEAR16 # WAVを指定
+    )
+    response = client.synthesize_speech(
+        request={"input": input_text, "voice": voice, "audio_config": audio_config}
+    )
+    # The response's audio_content is binary.
+    with open(f"./temp/{time}.wav", "wb") as out:
+        out.write(response.audio_content)
+        print(f'Audio content written to file "{time}.wav"')
+
+# 声の選択
+class Dropdown(discord.ui.Select):
+    def __init__(self):
+        # Set the options that will be presented inside the dropdown
+        options = [
+            discord.SelectOption(label='hikari', description='従来のyomi-KAIの声'),
+            discord.SelectOption(label='ja-JP-Wavenet-A', description='女声'),
+            discord.SelectOption(label='ja-JP-Wavenet-D', description='男声'),
+        ]
+        # The placeholder is what will be shown when no option is chosen
+        # The min and max values indicate we can only pick one of the three options
+        # The options parameter defines the dropdown options. We defined this above
+        super().__init__(placeholder='初期設定はja-JP-Wavenet-Aです', min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        # Use the interaction object to send a response message containing
+        # the user's favourite colour or choice. The self object refers to the
+        # Select object, and the values attribute gets a list of the user's
+        # selected options. We only want the first one.
+        await interaction.response.send_message(f'{self.values[0]}が選択されました')
+        global selected_speaker
+        selected_speaker = self.values[0]
+
+class DropdownView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        # Adds the dropdown to our view object.
+        self.add_item(Dropdown())
+
+
 intents = discord.Intents.default()
+intents.message_content = True
 intents.members = True 
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
+connected_channel = {} # タプル定義
+selected_speaker = 'ja-JP-Wavenet-A' # 初期設定のスピーカー
 
-
-connected_channel = {}
 
 # 接続時の処理
 @bot.event
 async def on_ready():
     logger.info(f"Launch complete! Logged in as [{bot.user.name}]. PREFIX is [{PREFIX}].")
 
-# もとからあるhelpコマンドを無効化
-bot.remove_command('help')
-
 # ヘルプコマンド
 @bot.command()
 async def help(ctx):
-    help_embed = discord.Embed(title="yomi-KAI", inline="false", color=0x3399cc)
+    help_embed = discord.Embed(title="yomi-KAI", color=0x3399cc)
     help_embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
     help_embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
     help_embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
@@ -123,14 +179,16 @@ async def c(ctx):
     global connected_channel
 
     async def connect(ctx):
-        connected_embed = discord.Embed(title="読み上げ開始", inline="false", color=0x3399cc)
+        view = DropdownView()
+        await ctx.send("話者を選んでください", view=view)
+        connected_embed = discord.Embed(title="読み上げ開始", color=0x3399cc)
         connected_embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline="false")
         connected_embed.add_field(name="ボイスチャンネル", value=f"{ctx.author.voice.channel.name}", inline="false")
         await ctx.send(embed=connected_embed)
         logger.info(f"{ctx.author.voice.channel.name}に接続しました")
         connected_channel[ctx.guild] = ctx.channel
 
-    if ctx.guild.voice_client is not None:
+    if ctx.guild.voice_client is not None: # 他のボイスチャンネルに接続していた場合
         await ctx.guild.voice_client.move_to(ctx.author.voice.channel)
         await connect(ctx)
         return
@@ -166,7 +224,7 @@ async def dict(ctx, *args):
             word[args[1]] = args[2]
             with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
                 f.write(json.dumps(word, indent=2, ensure_ascii=False))
-            dict_add_embed = discord.Embed(title="辞書追加", inline="true", color=0x3399cc)
+            dict_add_embed = discord.Embed(title="辞書追加", color=0x3399cc)
             dict_add_embed.add_field(name="単語", value=f"{args[1]}", inline="false")
             dict_add_embed.add_field(name="読み", value=f"{args[2]}", inline="false")
             await ctx.send(embed=dict_add_embed)
@@ -188,7 +246,7 @@ async def dict(ctx, *args):
             return
 
         if args[0] == "help" and len(args) == 1:
-            dict_help_embed = discord.Embed(title="辞書機能ヘルプ", inline="false", color=0x3399cc)
+            dict_help_embed = discord.Embed(title="辞書機能ヘルプ", color=0x3399cc)
             dict_help_embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
             dict_help_embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
             dict_help_embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
@@ -251,10 +309,19 @@ async def on_message(message):
         # サーバー絵文字置換
         read_msg = re.sub(r"<:(.*?):[0-9]{18}>", r"\1", read_msg)
 
+        # *text*置換
+        read_msg = re.sub(r"\*(.*?)\*", r"\1", read_msg)
+
         # 音声ファイル作成
         gen_time = time.time()
-        with open(f"./temp/{gen_time}.wav","wb") as f:
-            f.write(vt.speaker(SPEAKER).pitch(PITCH).to_wave(read_msg))
+        if selected_speaker == "hikari":
+            with open(f"./temp/{gen_time}.wav","wb") as f:
+                f.write(vt.speaker(SPEAKER).pitch(PITCH).to_wave(read_msg))
+        if selected_speaker == "ja-JP-Wavenet-A":
+            synthesize_text(read_msg, selected_speaker, gen_time)
+        if selected_speaker == "ja-JP-Wavenet-D":
+            synthesize_text(read_msg, selected_speaker, gen_time)
+
 
         # 音声読み上げ
         enqueue(message.guild.voice_client, message.guild, discord.FFmpegPCMAudio(f"./temp/{gen_time}.wav", options= "-af atempo=" + str(SPEED / 100)))
@@ -264,14 +331,14 @@ async def on_message(message):
         with wave.open(f"./temp/{gen_time}.wav", "rb")as f:
             wave_length=(f.getnframes() / f.getframerate() / (SPEED / 100)) # 再生時間 
         logger.info(f"PlayTime:{wave_length}")
-        await asyncio.sleep(wave_length + 30)
+        await asyncio.sleep(wave_length + 10)
 
         os.remove(f"./temp/{gen_time}.wav")
 
 # 誰も居なくなると自動切断
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if (member.guild.voice_client is not None and member.id != bot.user.id and member.guild.voice_client.channel is before.channel and len(member.guild.voice_client.channel.members) == 1):
+    if (member.guild.voice_client is not None and member.id != bot.user.id and member.guild.voice_client.channel is before.channel and len(member.guild.voice_client.channel.members) == 1): # ボイスチャンネルに自分だけ参加していたら
         await member.guild.voice_client.disconnect()
         await connected_channel[member.guild].send("自動切断しました")
         logger.info(f"自動切断しました")

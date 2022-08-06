@@ -22,7 +22,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 依存ライブラリ
 
-- discord.py[voice]
+- discord.py **2.0以上**
 - python-voicetext
 
 ## 導入方法
@@ -31,21 +31,24 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与。
 1. [VoiceText Web API](https://cloud.voicetext.jp/webapi)に登録し、APIキーを受け取る。
+1. [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー(JSONファイル)を受け取る。
 1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から `yomi-KAI-v***.zip` をダウンロードして解凍。
-1. `settings.json.example` を開き、DiscordのトークンとVoiceTextのAPIキーを入力。
-1. `settings.json` で名前をつけて保存。
+1. `config.ini.example` を開き、DiscordのトークンVoiceTextのAPIキー、GCPのキーのディレクトリ(ファイル名も含む)を入力。
+1. `config.ini` で名前をつけて保存。
+1. `windows_setup.bat`を実行
 
 ### Linux
 
-1. Windowsの5. まで同じ
+1. Windowsの6. まで同じ
 1. Python, FFmpegをインストール
-1. Pythonに `requirements.txt` のライブラリをインストール
+1. `pip install git+https://github.com/Rapptz/discord.py`
+1. `pip install python-voicetext`
 
 ## 起動方法
 
 ### Windows
 
-`windows-run.bat` を実行。
+`yomi-KAI.exe` を実行。
 
 ### Linux
 
@@ -53,19 +56,19 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## コマンド
 
-### yomi.c
+### y.c
 
 発言者と同じボイスチャンネルに接続します。
 
-### yomi.dc
+### y.dc
 
 ボイスチャンネルから切断します。
 
-### yomi.dict
+### y.dict
 
-辞書に関する操作です。詳しくは`yomi.dict help`を参照してください。
+辞書に関する操作です。詳しくは`y.dict help`を参照してください。
 
-### yomi.help
+### y.help
 
 このヘルプを表示します。
 
@@ -77,7 +80,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 設定
 
-`settings.json` から設定を変更できます。現在設定可能な項目は以下の通りです。
+`config.ini` から設定を変更できます。現在設定可能な項目は以下の通りです。
 
 - プレフィックス
 - 話者（声質）
@@ -87,6 +90,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ## 補足
 
 - 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は `./dict/` です。
+- **discord.py v1.7.3では動作しません。**
 
 ## サポート
 
