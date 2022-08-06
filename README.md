@@ -43,6 +43,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 1. Python, FFmpegをインストール
 1. `pip install git+https://github.com/Rapptz/discord.py`
 1. `pip install python-voicetext`
+1. `pip install google-cloud-texttospeech`
 
 ## 起動方法
 
