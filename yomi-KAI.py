@@ -12,10 +12,8 @@ from collections import defaultdict, deque
 from datetime import datetime
 from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
                      StreamHandler, basicConfig, getLogger)
-
 import discord
 from discord.ext import commands
-from soupsieve import select
 from voicetext import VoiceText
 
 # ディレクトリ作成
