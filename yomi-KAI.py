@@ -15,6 +15,7 @@ from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter,
 import discord
 from discord.ext import commands
 from voicetext import VoiceText
+from google.cloud import texttospeech
 
 # ディレクトリ作成
 if not os.path.isdir("dict"):
@@ -91,7 +92,6 @@ def play(voice_client, queue):
 # 読み上げ
 def synthesize_text(text, name, time):
     """Synthesizes speech from the input string of text."""
-    from google.cloud import texttospeech
     client = texttospeech.TextToSpeechClient()
     input_text = texttospeech.SynthesisInput(text=text)
     # Note: the voice can also be specified by name.
@@ -304,10 +304,13 @@ async def on_message(message):
                 read_msg = re.sub(f"<@!?{Temp[i]}>", "アット" + user.display_name, read_msg)
 
         # サーバー絵文字置換
-        read_msg = re.sub(r"<:(.*?):[0-9]{18}>", r"\1", read_msg)
+        read_msg = re.sub(r"<:(.*?):[0-9]+>", r"\1", read_msg)
 
         # *text*置換
         read_msg = re.sub(r"\*(.*?)\*", r"\1", read_msg)
+
+        # _hoge_置換
+        read_msg = re.sub(r"_(.*?)_", r"\1", read_msg)
 
         # 音声ファイル作成
         gen_time = time.time()
