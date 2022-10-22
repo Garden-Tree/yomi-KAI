@@ -41,8 +41,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 1. Windowsの6. まで同じ
 1. Python, FFmpegをインストール
-1. `pip install git+https://github.com/Rapptz/discord.py`
-1. `pip install python-voicetext`
+1. `pip install -r requirements.txt`
 
 ## 起動方法
 
