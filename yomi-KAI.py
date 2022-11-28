@@ -209,7 +209,7 @@ async def dc(ctx):
 # 辞書
 @bot.command()
 async def dict(ctx, *args):
-    if os.path.isfile(f"./dict/{ctx.guild.id}.json") == True:
+    if os.path.isfile(f"./dict/{ctx.guild.id}.json"):
         with open(f"./dict/{ctx.guild.id}.json", "r", encoding="UTF-8")as f:
             word = json.load(f)
     else:
@@ -280,7 +280,7 @@ async def on_message(message):
         #print(read_msg)
 
         # 辞書置換
-        if os.path.isfile(f"./dict/{message.guild.id}.json") == True:
+        if os.path.isfile(f"./dict/{message.guild.id}.json"):
             with open(f"./dict/{message.guild.id}.json", "r", encoding="UTF-8")as f:
                 word = json.load(f)
             read_list = [] # あとでまとめて変換するときの読み仮名リスト
