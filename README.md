@@ -31,19 +31,17 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与。
 1. [VoiceText Web API](https://cloud.voicetext.jp/webapi)に登録し、APIキーを受け取る。
-1. [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー(JSONファイル)を受け取る。
+1. [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー（JSONファイル）を受け取る。
 1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から `yomi-KAI-v***.zip` をダウンロードして解凍。
-1. `config.ini.example` を開き、DiscordのトークンVoiceTextのAPIキー、GCPのキーのディレクトリ(ファイル名も含む)を入力。
+1. `config.ini.example` を開き、DiscordのトークンVoiceTextのAPIキー、GCPのキーのディレクトリ（ファイル名も含む）を入力。
 1. `config.ini` で名前をつけて保存。
 1. `windows_setup.bat`を実行
 
 ### Linux
 
 1. Windowsの6. まで同じ
-1. Python, FFmpegをインストール
-1. `pip install git+https://github.com/Rapptz/discord.py`
-1. `pip install python-voicetext`
-1. `pip install google-cloud-texttospeech`
+1. Python, FFmpeg, portaudio19-devをインストール
+1. `pip install -r requirements.txt`
 
 ## 起動方法
 

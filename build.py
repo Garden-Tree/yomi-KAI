@@ -10,3 +10,5 @@ shutil.copy("./yomi-KAI.py", "./yomi-KAI-v")
 shutil.copy("./config.ini.example", "./yomi-KAI-v")
 shutil.copy("./windows_setup.bat", "./yomi-KAI-v")
 shutil.copy("./ffmpeg_installation.ps1", "./yomi-KAI-v")
+
+# 引数にbuildを渡して実行
