@@ -8,7 +8,6 @@ import sys
 import wave
 import time
 import configparser
-import requests
 from pathlib import Path
 from voicevox_core import VoicevoxCore
 from collections import defaultdict, deque
@@ -17,6 +16,7 @@ from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter, StreamHandler,
 import discord
 from discord.ext import commands
 from google.cloud import texttospeech
+from unicodedata import east_asian_width
 
 # ディレクトリ作成
 if not os.path.isdir("dict"): os.mkdir("dict")
@@ -55,6 +55,7 @@ try:
     DIR               = config["DEFAULT"]["CREDENTIAL_JSON_DIR"]
     PREFIX            = config["DEFAULT"]["PREFIX"]
     AFK_TIME          = int(config["DEFAULT"]["AFK_TIME"])
+    SD_MSG            = config["DEFAULT"]["SD_MSG"]
 except:
     logger.exception("config.iniが見つかりません。")
     sys.exit()
@@ -164,6 +165,7 @@ async def help(ctx):
     help_embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
     help_embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
     help_embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
+    help_embed.add_field(name=f"{PREFIX}sd", value=f"突然の死に関する操作です。詳しくは`{PREFIX}sd help`を参照してください。", inline="false")
     help_embed.add_field(name=f"{PREFIX}help", value="このヘルプを表示します。", inline="false")
     await ctx.send(embed=help_embed)
     logger.info("helpを表示")
@@ -218,50 +220,84 @@ async def dict(ctx, *args):
     else:
         word = {}
 
-    if len(args) > 0:
+    if len(args) == 0:
+        await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
+        logger.info(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
+        return
 
-        if args[0] == "add" and len(args) == 3:
-            word[args[1]] = args[2]
-            with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
-                f.write(json.dumps(word, indent=2, ensure_ascii=False))
-            dict_add_embed = discord.Embed(title="辞書追加", color=0x3399cc)
-            dict_add_embed.add_field(name="単語", value=f"{args[1]}", inline="false")
-            dict_add_embed.add_field(name="読み", value=f"{args[2]}", inline="false")
-            await ctx.send(embed=dict_add_embed)
-            logger.info(f"辞書に{args[1]}を{args[2]}として追加しました")
-            return
+    if args[0] == "add" and len(args) == 3:
+        word[args[1]] = args[2]
+        with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
+            f.write(json.dumps(word, indent=2, ensure_ascii=False))
+        dict_add_embed = discord.Embed(title="辞書追加", color=0x3399cc)
+        dict_add_embed.add_field(name="単語", value=f"{args[1]}", inline="false")
+        dict_add_embed.add_field(name="読み", value=f"{args[2]}", inline="false")
+        await ctx.send(embed=dict_add_embed)
+        logger.info(f"辞書に{args[1]}を{args[2]}として追加しました")
+        return
 
-        if args[0] == "del" and len(args) == 2:
-            del word[args[1]]
-            with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
-                f.write(json.dumps(word, indent=2, ensure_ascii=False))
-            await ctx.channel.send(f"辞書から`{args[1]}`を削除しました")
-            logger.info(f"辞書から{args[1]}を削除しました")
-            return
+    if args[0] == "del" and len(args) == 2:
+        del word[args[1]]
+        with open(f"./dict/{ctx.guild.id}.json", "w", encoding="UTF-8")as f:
+            f.write(json.dumps(word, indent=2, ensure_ascii=False))
+        await ctx.channel.send(f"辞書から`{args[1]}`を削除しました")
+        logger.info(f"辞書から{args[1]}を削除しました")
+        return
 
-        if args[0] == "list" and len(args) == 1:
-            await ctx.channel.send("辞書を表示します")
-            logger.info(f"辞書を表示します")
-            await ctx.channel.send("```" + pprint.pformat(word, depth=1) + "```")
-            return
+    if args[0] == "list" and len(args) == 1:
+        await ctx.channel.send("辞書を表示します")
+        logger.info(f"辞書を表示します")
+        await ctx.channel.send("```" + pprint.pformat(word, depth=1) + "```")
+        return
 
-        if args[0] == "help" and len(args) == 1:
-            dict_help_embed = discord.Embed(title="辞書機能ヘルプ", color=0x3399cc)
-            dict_help_embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
-            dict_help_embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
-            dict_help_embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
-            dict_help_embed.add_field(name=f"{PREFIX}dict help", value="このヘルプを表示します。", inline="false")
-            await ctx.send(embed=dict_help_embed)
-            logger.info("dict.helpを表示")
-            return
-
-        else:
-            await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
-            logger.info(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
+    if args[0] == "help" and len(args) == 1:
+        dict_help_embed = discord.Embed(title="辞書機能ヘルプ", color=0x3399cc)
+        dict_help_embed.add_field(name=f"{PREFIX}dict add `word` `yomi`", value="`word`を`yomi`と読むように辞書に追加します。", inline="false")
+        dict_help_embed.add_field(name=f"{PREFIX}dict del `word`", value="`word`を辞書から削除します。", inline="false")
+        dict_help_embed.add_field(name=f"{PREFIX}dict list", value="現在登録されている辞書を表示します。", inline="false")
+        dict_help_embed.add_field(name=f"{PREFIX}dict help", value="このヘルプを表示します。", inline="false")
+        await ctx.send(embed=dict_help_embed)
+        logger.info("dict helpを表示")
+        return
 
     else:
         await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
         logger.info(f"コマンドが間違っています。`{PREFIX}dict help`を参照してください")
+
+# 突然の死
+@bot.command()
+async def sd(ctx, *args):
+    if len(args) == 0:
+        await ctx.channel.send(gen_sd_text(SD_MSG))
+        return
+    if args[0] == "help" and len(args) == 1:
+        sd_help_embed = discord.Embed(title="突然の死機能ヘルプ", color=0x3399cc)
+        sd_help_embed.add_field(name=f"{PREFIX}sd", value=f"{gen_sd_text(SD_MSG)}\nと出力します。", inline="false")
+        sd_help_embed.add_field(name=f"{PREFIX}sd `word`", value="＿人人人人＿\n＞　word　＜\n￣Y^Y^Y^Y￣\nのように出力します。複数行には対応していません。", inline="false")
+        sd_help_embed.add_field(name=f"{PREFIX}sd help", value="このヘルプを表示します。", inline="false")
+        await ctx.send(embed=sd_help_embed)
+        logger.info("sd helpを表示")
+    if len(args) == 1:
+        await ctx.channel.send(gen_sd_text(args[0]))
+        return
+    else:
+        await ctx.channel.send(f"コマンドが間違っています。`{PREFIX}sd help`を参照してください")
+
+def gen_sd_text(msg):
+    length = 0
+    for c in msg:
+        if east_asian_width(c) in 'FWA':
+            length += 2
+        else:
+            length += 1
+    sd_text = '＿人'
+    for i in range(length//2):
+        sd_text += '人'
+    sd_text += '人＿\n＞　' + msg + '　＜\n￣Y'
+    for i in range(length//2):
+        sd_text += '^Y'
+    sd_text += '^Y￣'
+    return sd_text
 
 # メッセージが送られた時
 @bot.event
@@ -336,11 +372,10 @@ async def on_message(message):
         global latest_time
         latest_time = time.time()
 
-        # タイマースタート
+        # AFKタイマースタート
         await asyncio.sleep(AFK_TIME)
         if (latest_time + AFK_TIME) < time.time():
             await auto_disconnect(message)
-
 
 async def auto_disconnect(member):
     await member.guild.voice_client.disconnect()
