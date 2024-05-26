@@ -165,7 +165,7 @@ async def help(ctx):
     help_embed.add_field(name=f"{PREFIX}c", value="発言者と同じボイスチャンネルに接続します。", inline="false")
     help_embed.add_field(name=f"{PREFIX}dc", value="ボイスチャンネルから切断します。", inline="false")
     help_embed.add_field(name=f"{PREFIX}dict", value=f"辞書に関する操作です。詳しくは`{PREFIX}dict help`を参照してください。", inline="false")
-    help_embed.add_field(name=f"{PREFIX}sd", value=f"突然の死に関する操作です。詳しくは`{PREFIX}sd help`を参照してください。", inline="false")
+    help_embed.add_field(name=f"{PREFIX}sd", value=f"「突然の死」に関する操作です。詳しくは`{PREFIX}sd help`を参照してください。", inline="false")
     help_embed.add_field(name=f"{PREFIX}help", value="このヘルプを表示します。", inline="false")
     await ctx.send(embed=help_embed)
     logger.info("helpを表示")
@@ -271,7 +271,7 @@ async def sd(ctx, *args):
         await ctx.channel.send(gen_sd_text(SD_MSG))
         return
     if args[0] == "help" and len(args) == 1:
-        sd_help_embed = discord.Embed(title="突然の死機能ヘルプ", color=0x3399cc)
+        sd_help_embed = discord.Embed(title="「突然の死」機能ヘルプ", color=0x3399cc)
         sd_help_embed.add_field(name=f"{PREFIX}sd", value=f"{gen_sd_text(SD_MSG)}\nと出力します。", inline="false")
         sd_help_embed.add_field(name=f"{PREFIX}sd `word`", value="＿人人人人＿\n＞　word　＜\n￣Y^Y^Y^Y￣\nのように出力します。複数行には対応していません。", inline="false")
         sd_help_embed.add_field(name=f"{PREFIX}sd help", value="このヘルプを表示します。", inline="false")
