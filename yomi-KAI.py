@@ -52,16 +52,19 @@ try:
     config = configparser.ConfigParser()
     config.read("config.ini", encoding="UTF-8")
     DISCORD_TOKEN     = config["DEFAULT"]["DISCORD_TOKEN"]
-    DIR               = config["DEFAULT"]["CREDENTIAL_JSON_DIR"]
+    USE_GOOGLE_TTS    = config.getboolean("DEFAULT", "USE_GOOGLE_TTS", fallback=False)
+    if USE_GOOGLE_TTS:
+        DIR           = config["DEFAULT"]["CREDENTIAL_JSON_DIR"]
     PREFIX            = config["DEFAULT"]["PREFIX"]
     AFK_TIME          = int(config["DEFAULT"]["AFK_TIME"])
     SD_MSG            = config["DEFAULT"]["SD_MSG"]
 except:
-    logger.exception("config.iniが見つかりません。")
+    logger.exception("config.iniが見つかりません。設定項目が足りていない可能性があります。")
     sys.exit()
 
 # 環境変数追加
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = DIR
+if USE_GOOGLE_TTS:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = DIR
 
 # キュー
 queue_dict = defaultdict(deque)
@@ -117,16 +120,17 @@ def voicevox_synthesize(text, speaker, gen_time):
 class Dropdown(discord.ui.Select):
     def __init__(self):
         # Set the options that will be presented inside the dropdown
-        options = [
-            discord.SelectOption(label='ja-JP-Wavenet-A', description='女声(初期設定)'),
-            discord.SelectOption(label='ja-JP-Wavenet-D', description='男声'),
-            discord.SelectOption(label='ずんだもん', description='ずんだもん'),
-            discord.SelectOption(label='春日部つむぎ', description='春日部つむぎ'),
-        ]
+        options = []
+        if USE_GOOGLE_TTS:
+            options.append(discord.SelectOption(label='ja-JP-Wavenet-A', description='Google女声'))
+            options.append(discord.SelectOption(label='ja-JP-Wavenet-D', description='Google男声'))
+            
+        options.append(discord.SelectOption(label='ずんだもん', description='VOICEVOX ずんだもん'))
+        options.append(discord.SelectOption(label='春日部つむぎ', description='VOICEVOX 春日部つむぎ'))
         # The placeholder is what will be shown when no option is chosen
         # The min and max values indicate we can only pick one of the three options
         # The options parameter defines the dropdown options. We defined this above
-        super().__init__(placeholder='初期設定はja-JP-Wavenet-Aです', min_values=1, max_values=1, options=options)
+        super().__init__(placeholder=f'初期設定は{selected_speaker}です', min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         # Use the interaction object to send a response message containing
@@ -149,7 +153,7 @@ intents.message_content = True
 intents.members = True 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 connected_channel = {} # タプル定義
-selected_speaker = 'ja-JP-Wavenet-A' # 初期設定のスピーカー
+selected_speaker = 'ja-JP-Wavenet-A' if USE_GOOGLE_TTS else 'ずんだもん' # 初期設定のスピーカー
 latest_time = 0
 
 

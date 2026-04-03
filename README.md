@@ -31,9 +31,9 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ### Windows
 
 1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与。
-1. [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー（JSONファイル）を受け取る。
+1. **(省略可: Googleの音声を使う場合のみ)** [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー（JSONファイル）を受け取る。
 1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から `yomi-KAI-v***.zip` をダウンロードして解凍。
-1. `config.ini.example` を開き、Discordのトークン、GCPのキーのディレクトリ（ファイル名も含む）を入力。
+1. `config.ini.example` を開き、Discordのトークンを入力。（※GCPの音声を使用する場合は合わせて `USE_GOOGLE_TTS = True` に変更し、GCPのキーのディレクトリも入力）。
 1. `config.ini` で名前をつけて保存。
 1. `windows_setup.bat`を実行
 
@@ -82,6 +82,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 `config.ini` から設定を変更できます。現在設定可能な項目は以下の通りです。
 
 - プレフィックス
+- Google TTSの使用切り替え (`USE_GOOGLE_TTS`)
 - 自動切断までの時間
 
 ## 補足
