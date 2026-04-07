@@ -130,11 +130,20 @@ dmypy.json
 
 
 ####################
+# yomi-KAI
 *.json
 dict/
 log/
 temp/
-python-3.9.7-embed-amd64/
 yomi-KAI-v*/
 *.zip
 *.ini
+
+# ビルドキャッシュ (Python Embeddable などのダウンロードキャッシュ)
+build_cache/
+
+# 同梱する外部ファイル群 (リポジトリには含めない)
+ffmpeg.exe
+voicevox_core/
+lib/
+dist/

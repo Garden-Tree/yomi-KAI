@@ -1,3 +1,8 @@
-git+https://github.com/Rapptz/discord.py
-python-voicetext
+discord.py[voice]>=2.0
+https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win_amd64.whl ; sys_platform == "win32" and platform_machine == "AMD64"
+https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-win32.whl ; sys_platform == "win32" and platform_machine == "x86"
+https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-macosx_10_12_x86_64.whl ; sys_platform == "darwin" and platform_machine == "x86_64"
+https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-macosx_11_0_arm64.whl ; sys_platform == "darwin" and platform_machine == "arm64"
+https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_x86_64.whl ; sys_platform == "linux" and platform_machine == "x86_64"
+https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/voicevox_core-0.16.4-cp310-abi3-manylinux_2_34_aarch64.whl ; sys_platform == "linux" and platform_machine == "aarch64"
 google-cloud-texttospeech
