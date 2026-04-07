@@ -1,7 +1,9 @@
 """
 yomi-KAI ビルドスクリプト
 ===========================
-Portable Python (embeddable) を同封した配布用パッケージを生成します。
+Portable Python (embeddable) を同封した完全なポータブル配布用パッケージを生成します。
+Python、ffmpeg、および VOICEVOX (エンジン・辞書・モデル) は実行時に自動ダウンロードされ、
+build_cache/ にキャッシュされます。事前の手動配置作業は不要です。
 
 使い方:
     python build.py [バージョン]
@@ -16,12 +18,12 @@ Portable Python (embeddable) を同封した配布用パッケージを生成し
     ├── yomi-KAI.bat         ... ダブルクリックで起動するランチャー
     ├── config.ini.example   ... 設定ファイルのサンプル
     ├── README.md
-    └── lib/                 ... ユーザーが直接触わらないファイル群
+    └── lib/                 ... ユーザーが直接触れないファイル群
          ├── yomi-KAI.py
-         ├── ffmpeg.exe
-         ├── voicevox_core/  ... モデル・辞書・ONNXランタイム
-         ├── packages/       ... Pythonパッケージ群
-         └── python/         ... Python Embeddable本体
+         ├── ffmpeg.exe          ... FFmpeg バイナリ (自動ダウンロード)
+         ├── voicevox_core/      ... モデル・辞書・ONNXランタイム (自動ダウンロード)
+         ├── packages/           ... Pythonパッケージ群 (自動インストール)
+         └── python/             ... Python Embeddable本体 (自動ダウンロード)
 """
 
 import sys
@@ -35,9 +37,21 @@ from pathlib import Path
 # ================================================================
 # 設定
 # ================================================================
-PYTHON_VERSION = "3.12.9"
+PYTHON_VERSION = "3.12.10"
 PYTHON_EMBED_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"
 PIP_BOOTSTRAP_URL = "https://bootstrap.pypa.io/get-pip.py"
+
+# ffmpeg のバージョン設定
+# リリースノート: https://github.com/GyanD/codexffmpeg/releases
+FFMPEG_VERSION = "8.1"
+FFMPEG_URL = f"https://github.com/GyanD/codexffmpeg/releases/download/{FFMPEG_VERSION}/ffmpeg-{FFMPEG_VERSION}-essentials_build.zip"
+
+# voicevox_core のバージョン設定
+# リリースノート: https://github.com/VOICEVOX/voicevox_core/releases
+VOICEVOX_CORE_VERSION = "0.16.4"
+VOICEVOX_DOWNLOADER_URL = f"https://github.com/VOICEVOX/voicevox_core/releases/download/{VOICEVOX_CORE_VERSION}/download-windows-x64.exe"
+
+
 
 VERSION = sys.argv[1] if len(sys.argv) > 1 else "dev"
 DIST_NAME = f"yomi-KAI-v{VERSION}"
@@ -45,23 +59,6 @@ DIST_ROOT = Path("./dist") / DIST_NAME
 LIB_DIR = DIST_ROOT / "lib"
 PYTHON_DIR = LIB_DIR / "python"
 PACKAGES_DIR = LIB_DIR / "packages"
-
-# ================================================================
-# 同梱する音声モデル (VVM) の設定
-# ================================================================
-# 新しいキャラクターに対応したときはここにVVMファイル名を追加してください。
-# VVMのIDとキャラクター対応表は voicevox_core/models/vvms/ を参照してください。
-# （例: 15.vvmがずんだもん、3.vvmが波音リツ、など）
-#
-# style_idとVVMの対応:
-#   ずんだもん    ... 15.vvm (style_id: 3=ノーマル, 1=あまあま, 7=ツンツン 等)
-#   春日部つむぎ  ... 8.vvm  (style_id: 8=ノーマル 等)
-#
-# ※ 新しいキャラを yomi-KAI.py に追加したら、対応するVVM IDをここに追記する。
-BUNDLED_VVM_IDS = [
-    "15",   # ずんだもん
-    "8",    # 春日部つむぎ
-]
 
 # ================================================================
 # ステップ管理ユーティリティ
@@ -72,10 +69,10 @@ def step(msg: str):
     print(f"{'='*60}")
 
 def check(msg: str):
-    print(f"  ✔ {msg}")
+    print(f"  [OK] {msg}")
 
 def warn(msg: str):
-    print(f"  ⚠ {msg}")
+    print(f"  [WARN] {msg}")
 
 # ================================================================
 # Step 0: 事前チェック
@@ -85,12 +82,6 @@ step("Step 0: 事前チェック")
 errors = []
 if not Path("./yomi-KAI.py").exists():
     errors.append("yomi-KAI.py が見つかりません。ビルドはプロジェクトルートから実行してください。")
-if not Path("./ffmpeg.exe").exists() and not Path("./lib/ffmpeg.exe").exists():
-    errors.append("ffmpeg.exe が見つかりません。プロジェクトルートまたは lib/ に配置してください。")
-
-voicevox_src = Path("./lib/voicevox_core") if Path("./lib/voicevox_core").exists() else Path("./voicevox_core")
-if not voicevox_src.exists():
-    errors.append("voicevox_core フォルダが見つかりません。lib/ またはプロジェクトルートに配置してください。")
 
 if errors:
     print("\n[ERROR] ビルドを開始できません:")
@@ -98,9 +89,9 @@ if errors:
         print(f"  - {e}")
     sys.exit(1)
 
-ffmpeg_src = Path("./lib/ffmpeg.exe") if Path("./lib/ffmpeg.exe").exists() else Path("./ffmpeg.exe")
-check(f"ffmpeg: {ffmpeg_src}")
-check(f"voicevox_core: {voicevox_src}")
+ffmpeg_src = None  # 自動ダウンロードするのでここでは未設定
+check(f"ffmpeg: v{FFMPEG_VERSION} をダウンロード予定")
+check(f"voicevox_core: v{VOICEVOX_CORE_VERSION} をダウンロード予定 (0.vvmのみ同梱)")
 
 # ================================================================
 # Step 1: dist クリーンアップ
@@ -135,9 +126,39 @@ with zipfile.ZipFile(embed_zip, "r") as zf:
 check(f"Python Embeddable を展開: {PYTHON_DIR}")
 
 # ================================================================
-# Step 3: pip を有効化してパッケージをインストール
+# Step 3: ffmpeg をダウンロード
 # ================================================================
-step("Step 3: 依存パッケージのインストール")
+step("Step 3: ffmpeg をダウンロード")
+
+ffmpeg_cache_zip = Path(f"./build_cache/ffmpeg-{FFMPEG_VERSION}-essentials_build.zip")
+ffmpeg_exe_cache = Path(f"./build_cache/ffmpeg-{FFMPEG_VERSION}.exe")
+
+if not ffmpeg_exe_cache.exists():
+    if not ffmpeg_cache_zip.exists():
+        print(f"  ダウンロード中: {FFMPEG_URL}")
+        urllib.request.urlretrieve(FFMPEG_URL, ffmpeg_cache_zip)
+        check("ダウンロード完了")
+    else:
+        check(f"キャッシュを使用: {ffmpeg_cache_zip}")
+
+    # zipから ffmpeg.exe だけを取り出す
+    with zipfile.ZipFile(ffmpeg_cache_zip, "r") as zf:
+        exe_entries = [e for e in zf.namelist() if e.endswith("bin/ffmpeg.exe")]
+        if not exe_entries:
+            print("[ERROR] zip内に ffmpeg.exe が見つかりませんでした。")
+            sys.exit(1)
+        with zf.open(exe_entries[0]) as src, open(ffmpeg_exe_cache, "wb") as dst:
+            dst.write(src.read())
+    check(f"ffmpeg.exe を抽出: {ffmpeg_exe_cache}")
+else:
+    check(f"キャッシュを使用: {ffmpeg_exe_cache}")
+
+ffmpeg_src = ffmpeg_exe_cache
+
+# ================================================================
+# Step 4: pip を有効化してパッケージをインストール
+# ================================================================
+step("Step 4: 依存パッケージのインストール")
 
 # python312._pth の site-packages コメントを外してimportを有効化
 pth_files = list(PYTHON_DIR.glob("python*._pth"))
@@ -173,9 +194,42 @@ subprocess.run([
 check(f"依存パッケージのインストール完了: {PACKAGES_DIR}")
 
 # ================================================================
-# Step 4: アセットのコピー
+# Step 5: voicevox_core のダウンロード
 # ================================================================
-step("Step 4: アセットをコピー")
+step("Step 5: voicevox_core をダウンロード")
+
+vvc_cache_dir = Path(f"./build_cache/voicevox_core-{VOICEVOX_CORE_VERSION}")
+downloader_exe = Path(f"./build_cache/voicevox-downloader-{VOICEVOX_CORE_VERSION}.exe")
+
+if not downloader_exe.exists():
+    print(f"  ダウンロード中: {VOICEVOX_DOWNLOADER_URL}")
+    urllib.request.urlretrieve(VOICEVOX_DOWNLOADER_URL, downloader_exe)
+    check("ダウンローダー取得完了")
+else:
+    check(f"キャッシュを使用: {downloader_exe}")
+
+# ダウンローダーがまだ実行されていない場合のみ実行
+if not (vvc_cache_dir / "onnxruntime").exists():
+    vvc_cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # エンジン・辞書のダウンロード (c-apiとmodelsを除外)
+    cmd_engine = [str(downloader_exe), "-o", str(vvc_cache_dir), "--exclude", "c-api", "--exclude", "models"]
+    print("  voicevox_core エンジンダウンロード中...")
+    subprocess.run(cmd_engine, input=b"y\n", check=True)
+    
+    # 0.vvmのみダウンロード
+    cmd_model = [str(downloader_exe), "-o", str(vvc_cache_dir), "--only", "models", "--models-pattern", "0.vvm"]
+    print("  voicevox_core 音声モデル(0.vvm)ダウンロード中...")
+    subprocess.run(cmd_model, input=b"y\n", check=True)
+        
+    check(f"voicevox_core ダウンロード完了: {vvc_cache_dir}")
+else:
+    check(f"キャッシュを使用: {vvc_cache_dir}")
+
+# ================================================================
+# Step 6: アセットのコピー
+# ================================================================
+step("Step 6: アセットをコピー")
 
 # プログラム本体
 shutil.copy("./yomi-KAI.py", LIB_DIR / "yomi-KAI.py")
@@ -183,41 +237,25 @@ check("yomi-KAI.py → lib/")
 
 # ffmpeg.exe
 shutil.copy(str(ffmpeg_src), LIB_DIR / "ffmpeg.exe")
-check(f"ffmpeg.exe → lib/ ({ffmpeg_src})")
+check(f"ffmpeg.exe → lib/ (v{FFMPEG_VERSION})")
 
-# voicevox_core: モデル以外のフォルダ (辞書・DLL) はすべてコピー
-vvc_dst = LIB_DIR / "voicevox_core"
-vvc_dst.mkdir(parents=True, exist_ok=True)
-for sub in voicevox_src.iterdir():
-    if sub.name == "models":
-        continue  # modelsはVVM選別コピーするのでここではスキップ
-    dst = vvc_dst / sub.name
-    if sub.is_dir():
-        shutil.copytree(str(sub), str(dst))
-    else:
-        shutil.copy(str(sub), str(dst))
+# voicevox_core: onnxruntime, dict, および models の 0.vvm のみをコピー
+print(f"  voicevox_core をコピー中...")
+vvc_dest = LIB_DIR / "voicevox_core"
+vvc_dest.mkdir(parents=True)
 
-# voicevox_core: 音声モデル (VVM) は BUNDLED_VVM_IDS に含まれるものだけコピー
-vvms_src = voicevox_src / "models" / "vvms"
-vvms_dst = vvc_dst / "models" / "vvms"
-vvms_dst.mkdir(parents=True, exist_ok=True)
-# モデルフォルダ内の models/ 直下ファイルもコピー (README等)
-models_src = voicevox_src / "models"
-for f in models_src.iterdir():
-    if f.is_file():
-        shutil.copy(str(f), str(vvc_dst / "models" / f.name))
+# onnxruntime
+shutil.copytree(str(vvc_cache_dir / "onnxruntime"), str(vvc_dest / "onnxruntime"))
+# dict
+shutil.copytree(str(vvc_cache_dir / "dict"), str(vvc_dest / "dict"))
+# models (0.vvmのみ)
+(vvc_dest / "models" / "vvms").mkdir(parents=True)
+shutil.copy(str(vvc_cache_dir / "models/vvms/0.vvm"), str(vvc_dest / "models/vvms/0.vvm"))
+# モデル関連のライセンス等ファイルがもしあればコピーしておく
+for f in (vvc_cache_dir / "models").glob("*.txt"):
+    shutil.copy(str(f), str(vvc_dest / "models" / f.name))
 
-bundled_count = 0
-for vvm_id in BUNDLED_VVM_IDS:
-    vvm_file = vvms_src / f"{vvm_id}.vvm"
-    if vvm_file.exists():
-        shutil.copy(str(vvm_file), str(vvms_dst / vvm_file.name))
-        check(f"VVM: {vvm_id}.vvm → lib/voicevox_core/models/vvms/")
-        bundled_count += 1
-    else:
-        warn(f"VVM '{vvm_id}.vvm' が見つかりませんでした。スキップします。")
-
-check(f"voicevox_core → lib/voicevox_core/ ({bundled_count}/{len(BUNDLED_VVM_IDS)} 音声モデルを同梱)")
+check(f"voicevox_core → lib/voicevox_core/ (0.vvmのみを同梱)")
 
 # ユーザー向けファイル
 shutil.copy("./config.ini.example", DIST_ROOT / "config.ini.example")
@@ -227,9 +265,9 @@ if Path("./icon.ico").exists():
 check("config.ini.example, README.md → ルート")
 
 # ================================================================
-# Step 5: yomi-KAI.bat を生成
+# Step 7: yomi-KAI.bat を生成
 # ================================================================
-step("Step 5: ランチャー (yomi-KAI.bat) を生成")
+step("Step 7: ランチャー (yomi-KAI.bat) を生成")
 
 launcher_content = """\
 @echo off
@@ -241,9 +279,9 @@ pause
 check("yomi-KAI.bat を生成しました")
 
 # ================================================================
-# Step 6: ZIP圧縮
+# Step 8: ZIP圧縮
 # ================================================================
-step("Step 6: ZIP に圧縮")
+step("Step 8: ZIP に圧縮")
 
 zip_path = Path("./dist") / f"{DIST_NAME}.zip"
 with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:

@@ -18,12 +18,12 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ## 環境
 
 - Python 3.12以上
-- FFmpeg 4.4以上
+- FFmpeg 8.1以上
 
 ## 依存ライブラリ
 
-- discord.py **2.0以上**
-- google-cloud-texttospeech
+- [discord.py **2.0以上**](https://github.com/Rapptz/discord.py)
+- [google-cloud-texttospeech](https://github.com/googleapis/google-cloud-python/tree/main/packages/google-cloud-texttospeech)
 - [voicevox_core](https://github.com/VOICEVOX/voicevox_core)
 
 ## 導入方法
@@ -38,9 +38,12 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ### Linux
 
-1. Windowsの6. まで同じ
-1. Python, FFmpeg, portaudio19-devをインストール
+1. Windowsの1. と2. と同じ。
+1. リポジトリをクローンする。
+1. Python 3.12以上、FFmpeg、portaudio19-devをインストール。
+1. [voicevox_core](https://github.com/VOICEVOX/voicevox_core/releases)からモデル・辞書・DLL等をダウンロードし、`voicevox_core/`フォルダに配置する。
 1. `pip install -r requirements.txt`
+1. `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力。
 
 ## 起動方法
 
@@ -66,6 +69,10 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 辞書に関する操作です。詳しくは`y.dict help`を参照してください。
 
+### y.sd
+
+「突然の死」に関する操作です。詳しくは`y.sd help`を参照してください。
+
 ### y.help
 
 このヘルプを表示します。
@@ -75,6 +82,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 - 辞書
 - プレフィックスの変更
 - 自動切断
+- 突然の死
 
 ## 設定
 
@@ -89,16 +97,10 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 - **VOICEVOXの利用とクレジット制限:** 本プログラムは読み上げエンジンとして「VOICEVOX」を利用しています。生成された音声を利用・公開する際は、必ず各キャラクター（ずんだもん、春日部つむぎ等）が定める利用規約を遵守し、動画などに「VOICEVOX:ずんだもん」等のクレジット表記を行ってください。
 - 本プログラムをアップデートする際には、辞書データを手動で引き継いでください。辞書データの場所は `./dict/` です。
 - **discord.py v1.7.3では動作しません。**
-- exeで起動した場合、pythonでの起動と比較して、若干の遅延が発生します。
 
 ## サポート
 
 サポートサーバーは[こちら](https://discord.gg/DWEQ2cP3KZ)。要望や質問はこのDiscordサーバーで受け付けています。**試用もできます。**
-
-## 支援
-
-サーバー運営費等が毎月発生しています。皆様のご支援をお待ちしております。開発のモチベーションにも繋がります！  
-[[Fantia]](https://fantia.jp/fanclubs/254049)
 
 ## 作者
 

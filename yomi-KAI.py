@@ -8,6 +8,7 @@ import sys
 import wave
 import time
 import configparser
+import platform
 from pathlib import Path
 
 # --- 配布版パス解決 ---
@@ -25,7 +26,7 @@ if pkg_path.exists():
 from voicevox_core.blocking import Onnxruntime, OpenJtalk, Synthesizer, VoiceModelFile
 from collections import defaultdict, deque
 from datetime import datetime
-from logging import (DEBUG, INFO, NOTSET, FileHandler, Formatter, StreamHandler, basicConfig, getLogger)
+from logging import (DEBUG, INFO, ERROR, NOTSET, FileHandler, Formatter, StreamHandler, basicConfig, getLogger)
 import discord
 from discord.ext import commands
 from google.cloud import texttospeech
@@ -50,6 +51,9 @@ fh.setFormatter(Formatter(format))
 basicConfig(level=NOTSET, handlers=[sh, fh])
 logger = getLogger(__name__)
 
+# voicevox_core 内部の動作に影響のない警告ログ（バージョン差異など）を抑制
+getLogger("voicevox_core").setLevel(ERROR)
+
 # 起動時に./temp内の*.wavをすべて削除
 for filename in glob.glob("./temp/*.wav"):
     os.remove(filename)
@@ -71,7 +75,7 @@ try:
     PREFIX            = config["DEFAULT"]["PREFIX"]
     AFK_TIME          = int(config["DEFAULT"]["AFK_TIME"])
     SD_MSG            = config["DEFAULT"]["SD_MSG"]
-except:
+except Exception:
     logger.exception("config.iniが見つかりません。設定項目が足りていない可能性があります。")
     sys.exit()
 
@@ -115,7 +119,15 @@ voicevox_dir = Path("./lib/voicevox_core") if Path("./lib/voicevox_core").exists
 try:
     onnx = Onnxruntime.get()
     if onnx is None:
-        Onnxruntime.load_once(filename=str(voicevox_dir / "onnxruntime/lib/voicevox_onnxruntime.dll"))
+        os_name = platform.system()
+        if os_name == "Windows":
+            onnx_lib = "voicevox_onnxruntime.dll"
+        elif os_name == "Darwin":
+            onnx_lib = "libvoicevox_onnxruntime.dylib"
+        else:
+            onnx_lib = "libvoicevox_onnxruntime.so"
+            
+        Onnxruntime.load_once(filename=str(voicevox_dir / f"onnxruntime/lib/{onnx_lib}"))
         onnx = Onnxruntime.get()
         
     openjtalk = OpenJtalk(voicevox_dir / "dict/open_jtalk_dic_utf_8-1.11")

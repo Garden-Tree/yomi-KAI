@@ -2,8 +2,9 @@
 DISCORD_TOKEN = YOUR_DISCORD_TOKEN
 USE_GOOGLE_TTS = False
 CREDENTIAL_JSON_DIR = YOUR_GCP_KEY_PATH
-;USE_GOOGLE_TTS=True の場合のみ必須。ABSOLUTE_PATH
+;USE_GOOGLE_TTS=True の場合のみ必須。絶対パス。
 PREFIX = y.
 AFK_TIME = 1800
 ;sec
 SD_MSG = 突然の死
+;y.sd を引数なしで実行したときに読み上げるメッセージ
