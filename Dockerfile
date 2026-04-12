@@ -25,7 +25,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     fi && \
     curl -sSL "$DOWNLOADER_URL" -o /tmp/download-linux && \
     chmod +x /tmp/download-linux && \
-    yes "y" | /tmp/download-linux -o /app/voicevox_core --exclude c-api && \
+    yes "y" | /tmp/download-linux -o /app/voicevox_core --exclude c-api --exclude models && \
+    yes "y" | /tmp/download-linux -o /app/voicevox_core --only models --models-pattern 0.vvm && \
     rm /tmp/download-linux
 
 # copy application code
