@@ -123,9 +123,13 @@ try:
         if os_name == "Windows":
             onnx_lib = "voicevox_onnxruntime.dll"
         elif os_name == "Darwin":
-            onnx_lib = "libvoicevox_onnxruntime.dylib"
+            onnx_lib_pattern = "libvoicevox_onnxruntime.dylib*"
+            candidate = list((voicevox_dir / "onnxruntime/lib").glob(onnx_lib_pattern))
+            onnx_lib = candidate[0].name if candidate else "libvoicevox_onnxruntime.dylib"
         else:
-            onnx_lib = "libvoicevox_onnxruntime.so"
+            onnx_lib_pattern = "libvoicevox_onnxruntime.so*"
+            candidate = list((voicevox_dir / "onnxruntime/lib").glob(onnx_lib_pattern))
+            onnx_lib = candidate[0].name if candidate else "libvoicevox_onnxruntime.so"
             
         Onnxruntime.load_once(filename=str(voicevox_dir / f"onnxruntime/lib/{onnx_lib}"))
         onnx = Onnxruntime.get()
