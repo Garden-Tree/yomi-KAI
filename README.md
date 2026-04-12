@@ -45,6 +45,13 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 1. `pip install -r requirements.txt`
 1. `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力。
 
+### Docker
+
+1. Windowsの1. と2. と同じ。
+1. リポジトリをクローンするか、ソースコードを環境にダウンロードする。
+1. `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを作成する。
+1. ターミナルで `docker compose up -d` を実行する（初回時は音声モデルのダウンロードや環境構築などが自動で行われます）。
+
 ## 起動方法
 
 ### Windows
@@ -54,6 +61,12 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ### Linux
 
 `yomi-KAI.py` を実行。
+
+### Docker
+
+ターミナルで `docker compose up -d` を実行します（バックグラウンドで起動）。
+- ログを確認する: `docker compose logs -f`
+- 終了する: `docker compose down`
 
 ## コマンド
 
