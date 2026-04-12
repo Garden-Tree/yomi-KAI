@@ -1,0 +1,11 @@
+.git
+.gitignore
+__pycache__/
+build_cache/
+dist/
+venv/
+lib/
+log/
+temp/
+config.ini
+voicevox_core/

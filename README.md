@@ -15,10 +15,15 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 準備中
 
-## 環境
+## 環境・推奨スペック
 
 - Python 3.12以上
 - FFmpeg 8.1以上
+
+### 推奨スペック（Docker）
+- CPU: 最低4コア（音声合成処理をCPUで行うため、なるべく多く割り当てることを推奨）
+- メモリ: 512MB 以上
+- ストレージ: 8GB 以上
 
 ## 依存ライブラリ
 
@@ -28,34 +33,60 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ## 導入方法
 
+### 事前準備 (全環境共通)
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与します。
+1. **(省略可: Googleの音声を使う場合のみ)** [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー（JSONファイル）を受け取ります。
+1. 後述する各環境の手順でリポジトリ等を用意したのち、同梱されている `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力して保存します（※GCPの音声を使用する場合は合わせて `USE_GOOGLE_TTS = True` に変更し、GCPのキーのディレクトリも入力）。
+
 ### Windows
 
-1. [Discord Developer Portal](https://discord.com/developers/applications)からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与。
-1. **(省略可: Googleの音声を使う場合のみ)** [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー（JSONファイル）を受け取る。
-1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から、音声モデルやFFmpeg等が全て同梱された `yomi-KAI-v***.zip` をダウンロードして解凍。
-1. `config.ini.example` を開き、Discordのトークンを入力。（※GCPの音声を使用する場合は合わせて `USE_GOOGLE_TTS = True` に変更し、GCPのキーのディレクトリも入力）。
-1. `config.ini` で名前をつけて保存。
+1. [Releases](https://github.com/Garden-Tree/yomi-KAI/releases/latest)から、音声モデルやFFmpeg等が全て同梱された `yomi-KAI-v***.zip` をダウンロードして解凍します。
+1. 上記「事前準備」の通りに `config.ini` を作成し、設定します。
 
 ### Linux
 
-1. Windowsの1. と2. と同じ。
-1. リポジトリをクローンする。
-1. Python 3.12以上、FFmpeg、portaudio19-devをインストール。
-1. [voicevox_core](https://github.com/VOICEVOX/voicevox_core/releases)からモデル・辞書・DLL等をダウンロードし、`voicevox_core/`フォルダに配置する。
-1. `pip install -r requirements.txt`
-1. `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力。
+1. リポジトリをクローンします。
+1. Python 3.12以上、FFmpeg、portaudio19-devをインストールします。
+1. [voicevox_core](https://github.com/VOICEVOX/voicevox_core/releases)からモデル・辞書・DLL等をダウンロードし、`voicevox_core/`フォルダに配置します。
+1. `pip install -r requirements.txt` を実行します。
+1. 上記「事前準備」の通りに `config.ini` を作成し、設定します。
+
+### Docker
+
+1. リポジトリをクローンするか、ソースコードをダウンロードして解凍します。
+1. 上記「事前準備」の通りに `config.ini` を作成し、設定します。
+1. ターミナルで `docker compose build` を実行してイメージを構築します（初回時は音声モデルのダウンロードや環境構築などが自動で行われます）。
 
 ## 起動方法
 
 ### Windows
 
 `yomi-KAI.bat` を実行。
+起動している間、コンソール画面は閉じないでください。
 
 ### Linux
 
 `yomi-KAI.py` を実行。
+起動している間、ターミナル画面は閉じないでください。
+sshなどで接続している場合は、`nohup`コマンドなどを使ってバックグラウンドで実行してください。
+```bash
+nohup python3 yomi-KAI.py &
+```
+
+### Docker
+
+ターミナルで以下のコマンドを実行します（バックグラウンドで起動）。
+```bash
+docker compose up -d
+```
+- 新しくイメージを構築（ビルド）し直して起動する場合: `docker compose up -d --build`
+- ログを確認する: `docker compose logs -f`
+- 終了（停止）する: `docker compose down`
 
 ## コマンド
+
+※以下のコマンド例は、デフォルトのプレフィックスが `y.` に設定されている場合を想定しています（プレフィックスは `config.ini` から自由に変更可能です）。
 
 ### y.c
 
@@ -101,6 +132,11 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ## サポート
 
 サポートサーバーは[こちら](https://discord.gg/DWEQ2cP3KZ)。要望や質問はこのDiscordサーバーで受け付けています。**試用もできます。**
+
+## 開発者向け情報
+
+yomi-KAIの構造や使用している内部システム、ビルドスクリプトの仕組みなどについては、以下のドキュメントを参照してください。
+- [技術スタックとアーキテクチャ・動作フロー (docs/architecture.md)](./docs/architecture.md)
 
 ## 作者
 
