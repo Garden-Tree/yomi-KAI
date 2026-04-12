@@ -36,8 +36,8 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ### 事前準備 (全環境共通)
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与します。
-1. **(省略可: Googleの音声を使う場合のみ)** [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してサービスアカウントのキー（JSONファイル）を受け取ります。
-1. 後述する各環境の手順でリポジトリ等を用意したのち、同梱されている `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力して保存します（※GCPの音声を使用する場合は合わせて `USE_GOOGLE_TTS = True` に変更し、GCPのキーのディレクトリも入力）。
+1. **(省略可: Googleの音声を使う場合のみ)** [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してAPIキーを取得します。
+1. 後述する各環境の手順でリポジトリ等を用意したのち、同梱されている `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力して保存します（※GCPの音声を使用する場合は合わせて `USE_GOOGLE_TTS = True` に変更し、取得したAPIキーも入力します）。
 
 ### Windows
 

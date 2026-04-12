@@ -30,6 +30,7 @@ from logging import (DEBUG, INFO, ERROR, NOTSET, FileHandler, Formatter, StreamH
 import discord
 from discord.ext import commands
 from google.cloud import texttospeech
+from google.api_core.client_options import ClientOptions
 from unicodedata import east_asian_width
 
 # ディレクトリ作成
@@ -71,7 +72,7 @@ try:
     DISCORD_TOKEN     = config["DEFAULT"]["DISCORD_TOKEN"]
     USE_GOOGLE_TTS    = config.getboolean("DEFAULT", "USE_GOOGLE_TTS", fallback=False)
     if USE_GOOGLE_TTS:
-        DIR           = config["DEFAULT"]["CREDENTIAL_JSON_DIR"]
+        GOOGLE_API_KEY = config["DEFAULT"]["GOOGLE_API_KEY"]
     PREFIX            = config["DEFAULT"]["PREFIX"]
     AFK_TIME          = int(config["DEFAULT"]["AFK_TIME"])
     SD_MSG            = config["DEFAULT"]["SD_MSG"]
@@ -79,10 +80,7 @@ except Exception:
     logger.exception("config.iniが見つかりません。設定項目が足りていない可能性があります。")
     sys.exit()
 
-# 環境変数追加
-if USE_GOOGLE_TTS:
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = DIR
-
+# 設定読み込み完了
 # キュー
 queue_dict = defaultdict(deque)
 def enqueue(voice_client, guild, source):
@@ -101,7 +99,8 @@ def play(voice_client, queue):
 # Google Text to Speechでの読み上げ
 def synthesize_text(text, speaker, gen_time):
     """Synthesizes speech from the input string of text."""
-    client = texttospeech.TextToSpeechClient()
+    client_options = ClientOptions(api_key=GOOGLE_API_KEY)
+    client = texttospeech.TextToSpeechClient(client_options=client_options)
     input_text = texttospeech.SynthesisInput(text=text)
     # Note: the voice can also be specified by name.
     # Names of voices can be retrieved with client.list_voices().

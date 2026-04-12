@@ -9,8 +9,4 @@ services:
       # 辞書データとログを永続化
       - ./dict:/app/dict
       - ./log:/app/log
-    # Google TTSを使用し、クレデンシャルJSONがある場合は下記をオンにしてパスを合わせます
-    # environment:
-    #   - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
-    # volumes:
-    #   - ./credentials.json:/app/credentials.json:ro
+    # Google TTSを使用する場合は、config.iniにAPIキーを設定し、USE_GOOGLE_TTS=Trueに変更してください。
