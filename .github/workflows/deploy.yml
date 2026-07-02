@@ -12,7 +12,7 @@ jobs:
       - name: Pull and restart
         # config.ini等が置かれた運用ディレクトリを直接更新する(checkoutは使わない)
         run: |
-          cd /opt/yomi-KAI
+          cd /root/yomi-KAI
           git pull origin main
           docker compose up -d --build
           docker image prune -f
