@@ -1,0 +1,18 @@
+name: Deploy
+on:
+  push:
+    branches: [main]
+concurrency: deploy # 連続マージ時に多重実行しない
+jobs:
+  deploy:
+    # 自宅サーバー(Proxmox VE LXC)上のセルフホストランナーで実行される。
+    # セキュリティ上、self-hostedランナーはこのワークフロー(push: main)以外で使わないこと。
+    runs-on: [self-hosted, deploy]
+    steps:
+      - name: Pull and restart
+        # config.ini等が置かれた運用ディレクトリを直接更新する(checkoutは使わない)
+        run: |
+          cd /root/yomi-KAI
+          git pull origin main
+          docker compose up -d --build
+          docker image prune -f
