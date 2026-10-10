@@ -1,6 +1,8 @@
 services:
   yomi-kai:
     build: .
+    # scripts/deploy.sh がこの名前を前提に、ロールバック用のタグ(yomi-kai:previous)を管理する
+    image: yomi-kai:latest
     container_name: yomi-kai
     restart: unless-stopped
     volumes:

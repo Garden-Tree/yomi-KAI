@@ -101,4 +101,17 @@ Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-c
 
 * `tests/` の pytest は、偽のボイスクライアント・偽の合成エンジンを使って、テキスト整形・辞書・設定・セッション（再生順、スキップ、AFK、切断）を検証します。Discord への接続や `voicevox_core` / `google-cloud-texttospeech` のインストールは不要です。
 * `.github/workflows/ci.yml`: `main` / `develop` への push とプルリクエストごとに `py_compile`、`ruff check .`、`pytest` を実行します。
-* `.github/workflows/deploy.yml`: `main` への push で、self-hosted ランナー上の `/root/yomi-KAI` で `git pull` → `docker compose up -d --build` を実行し、不要なイメージとビルドキャッシュを削除します。
+* `main` ブランチは保護されており、CI（`check` ジョブ）が成功しないとマージできません（管理者にも適用）。
+* `.github/workflows/deploy.yml`: `main` への push で走った CI が**成功したときだけ**、self-hosted ランナーで `scripts/deploy.sh` を実行します（`workflow_run`）。フォークからのプルリクエストでは動かないよう、イベントとリポジトリでも絞っています。
+
+### 5.1 デプロイスクリプト（`scripts/deploy.sh`）
+運用ディレクトリ `/root/yomi-KAI` で、CI が通ったコミットそのもの（`head_sha`）に対して次を行います。
+
+1. `git merge --ff-only` でそのコミットへ更新（運用ディレクトリにローカル変更があれば何もせず失敗）。
+2. 動作中のコンテナのイメージを `yomi-kai:previous` として退避。
+3. `docker compose up -d --build`。ビルドに失敗した場合は git を元に戻して終了（旧版のコンテナは動き続ける）。
+4. 起動確認: 最大120秒、コンテナのログに `Launch complete!` が出るのを待つ。
+5. 成功なら、タグのないイメージと7日以上使っていないビルドキャッシュを削除。直近のキャッシュは残すので、コードだけの変更なら apt / pip / VOICEVOX のダウンロードはやり直さない。
+6. 失敗なら直近のログを出力し、git を直前のコミットに戻して `yomi-kai:previous` で再起動（ロールバック）。デプロイは失敗として GitHub に表示される。
+
+依存ライブラリは `requirements.txt` でバージョンを固定しています。更新するときは手元でテストと動作確認をしてから版を上げてください。
