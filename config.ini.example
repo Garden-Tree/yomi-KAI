@@ -8,3 +8,6 @@ AFK_TIME = 1800
 ;sec
 SD_MSG = 突然の死
 ;y.sd を引数なしで実行したときに読み上げるメッセージ
+;以下は任意項目
+;VOICEVOX_LOAD_ALL_MODELS = False
+;True にすると voicevox_core/models/vvms/ の *.vvm をすべて読み込みます（既定は 0.vvm のみ）
