@@ -140,6 +140,9 @@ docker compose up -d
 - Google TTSの使用切り替え (`USE_GOOGLE_TTS`)
 - 自動切断までの時間
 - 読み上げる最大文字数 (`MAX_READ_LENGTH`、既定 100、0 で無制限)
+- VOICEVOXの音声モデルをすべて読み込むか (`VOICEVOX_LOAD_ALL_MODELS`、既定 False)
+
+> **VOICEVOXのモデルについて:** 既定では `voicevox_core/models/vvms/0.vvm`（ずんだもん・春日部つむぎ・四国めたん・雨晴はう）だけを読み込みます。他の `.vvm` も配置して使いたい場合は `config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を追加してください。モデルを増やすほどメモリ使用量と起動時間が増えます。また、ドロップダウンに表示できる話者は Discord の制限により25件までです。
 
 ## 補足
 
@@ -155,6 +158,19 @@ docker compose up -d
 
 yomi-KAIの構造や使用している内部システム、ビルドスクリプトの仕組みなどについては、以下のドキュメントを参照してください。
 - [技術スタックとアーキテクチャ・動作フロー (docs/architecture.md)](./docs/architecture.md)
+- [機能追加案 (docs/improvement-proposals.md)](./docs/improvement-proposals.md)
+
+### テスト・Lint
+
+テストは Discord への接続や `voicevox_core` / `google-cloud-texttospeech` を必要としません。
+
+```bash
+pip install "discord.py[voice]" pytest ruff
+pytest
+ruff check .
+```
+
+GitHub Actions でも `main` / `develop` への push とプルリクエストごとに同じチェックが実行されます。
 
 ## 作者
 

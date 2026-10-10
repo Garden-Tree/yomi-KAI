@@ -54,6 +54,8 @@ tests/                 # pytest（text / dictionary / settings / session / tts�
 * **接続 (`c`)**: ボイスクライアントと読み上げ対象のテキストチャンネルを `session.start()` に渡し、ワーカータスクを起動、AFKタイマーを開始します（発言がなくても `AFK_TIME` 秒後に自動切断）。
 * **読み上げ**: `on_message` は発言者の話者・速度を `resolve_voice()` で決め（2.3節）、整形済みテキストと一緒に `session.enqueue(text, speaker, speed)` で `asyncio.Queue` に積むだけです（AFKタイマーも張り直す）。セッション自体は話者を持ちません。
 * **ワーカー**: 1サーバーにつき1本。キューから1件取り出し `asyncio.to_thread` で合成 → 再生、を繰り返します。再生中に次の1件だけ先行して合成しますが、再生順は必ずキュー投入順です。FFmpeg のソースは `voice_client.play()` の直前に生成し、再生完了の `after` コールバックは `loop.call_soon_threadsafe` でイベントループ側の `asyncio.Event` をセットしてワーカーに制御を戻します。
+* **スキップ (`s` / `s all`)**: `s` は再生中なら `voice_client.stop()`、合成中ならその1件を再生しないよう印を付けます。`s all` はキューを空にしたうえで「世代番号」を1つ進めます。キューの各項目は積まれた時点の世代番号を持ち、ワーカーは世代が古い項目（合成中・先読み済みのもの）を再生せずに捨てます。
+* **AFKタイマー**: 読み上げ中（再生中・合成中・キューが空でない）は切断せず、読み上げが終わってからさらに `AFK_TIME` 秒待ちます。
 * **切断**: `dc` コマンド・Botのキック・AFKタイムアウト・VCが無人になった場合のいずれも `session.close()` を通り、ワーカー停止 → キュー破棄 → 再生停止 → 切断を行います。話者・速度の設定は `SettingsStore` に保存されているため、再接続・再起動後も引き継がれます。
 
 ### 2.3 サーバーごとの設定（`SettingsStore`）
@@ -70,7 +72,7 @@ tests/                 # pytest（text / dictionary / settings / session / tts�
 
 ## 3. アプリケーションの動作フロー
 1. **テキスト受信**: `VoiceCog.on_message` でテキストをフック（コマンド用のプレフィックスから始まるもの、Bot・DM・読み上げ対象外チャンネルの発言は除外）。
-2. **辞書置換**: `dict/{guild.id}.json` の内容を `DictionaryStore` が初回のみスレッドで読み込み、コンパイル済み正規表現と一緒にメモリへキャッシュ（`dict add` / `dict del` で破棄）。長い単語を優先して読み仮名に置換。
+2. **辞書置換**: `dict/{guild.id}.json` の内容を `DictionaryStore` が初回のみスレッドで読み込み、コンパイル済み正規表現と一緒にメモリへキャッシュ（`dict add` / `dict del` 時は書き込んだ内容で差し替えるため、読み上げ時にファイル I/O は発生しない）。長い単語を優先して読み仮名に置換。
 3. **前処理**: コードブロック（「コード省略」に置換、インラインコードは中身だけ残す）、URL、ネタバレタグ(`\|\|...\|\|`)、メンション(`<@...>` / `<@&...>` / `<#...>`)、カスタム絵文字、簡易なマークダウンを置換（`text.build_read_text`）。`*強調*` は記号の内側が空白でない場合のみ、`_強調_` は英数字に挟まれていない場合のみ除去するため、`snake_case_name` や `2 * 3 * 4` はそのまま読まれます。最後に `MAX_READ_LENGTH` 文字を超えた分を切り詰めて「以下略」を付けます。
 4. **音声合成・再生**: 上記のワーカーが、発言者ごとに決めた話者・速度（2.3節）に応じたエンジンでメモリ上に WAV を生成し、FFmpeg 経由で順番にVCへ送信。
 5. **AFK監視**: 接続時および読み上げのたびにタイマーを張り直し、`AFK_TIME` 秒間読み上げがない場合や、VCにBot以外誰もいなくなった場合は自動でボイスチャンネルから切断。
@@ -94,3 +96,9 @@ Python環境の構築やコマンド操作をユーザーに強いることな�
 ### 4.2 自己ホスト向けのDocker版
 Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-compose` での一発構築を提供しています。
 軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`)、各種ログ(`log/`)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
+
+## 5. テストとCI
+
+* `tests/` の pytest は、偽のボイスクライアント・偽の合成エンジンを使って、テキスト整形・辞書・設定・セッション（再生順、スキップ、AFK、切断）を検証します。Discord への接続や `voicevox_core` / `google-cloud-texttospeech` のインストールは不要です。
+* `.github/workflows/ci.yml`: `main` / `develop` への push とプルリクエストごとに `py_compile`、`ruff check .`、`pytest` を実行します。
+* `.github/workflows/deploy.yml`: `main` への push で、self-hosted ランナー上の `/root/yomi-KAI` で `git pull` → `docker compose up -d --build` を実行し、不要なイメージとビルドキャッシュを削除します。

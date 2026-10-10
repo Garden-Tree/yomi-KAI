@@ -1,7 +1,7 @@
 """サーバーごとの読み辞書 ``dict/{guild_id}.json`` の読み書き。
 
 ファイル形式は従来どおり ``{"単語": "読み", ...}``（indent=2, ensure_ascii=False）。
-読み込んだ辞書はコンパイル済み正規表現と一緒にメモリへキャッシュし、追加・削除で破棄する。
+読み込んだ辞書はコンパイル済み正規表現と一緒にメモリへキャッシュし、追加・削除時は書き込んだ内容で差し替える（破棄しない）。
 同期メソッドはファイル I/O を伴うため、イベントループからは ``asyncio.to_thread`` 経由で呼ぶこと
 （``aget`` はキャッシュがあれば I/O なしで返す）。
 """
@@ -76,7 +76,9 @@ class DictionaryStore:
             words = self._read_words(guild_id)
             words[word] = reading
             self._write_words(guild_id, words)
-            self._cache.pop(guild_id, None)
+            # キャッシュを破棄せず差し替える。破棄すると次の発言でファイル読み込みの待ちが発生し、
+            # その間に届いた発言と読み上げ順が入れ替わる可能性がある
+            self._cache[guild_id] = compile_dictionary(words)
 
     def remove(self, guild_id: int, word: str) -> bool:
         """単語を削除する。未登録なら False を返し、ファイルは変更しない。"""
@@ -86,5 +88,5 @@ class DictionaryStore:
                 return False
             del words[word]
             self._write_words(guild_id, words)
-            self._cache.pop(guild_id, None)
+            self._cache[guild_id] = compile_dictionary(words)
             return True

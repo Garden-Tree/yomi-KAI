@@ -45,15 +45,19 @@ def test_reads_existing_file(tmp_path):
     assert store.get(GUILD).apply("東京へ") == "とうきょうへ"
 
 
-def test_cache_is_invalidated_on_add_and_del(tmp_path):
+def test_cache_is_replaced_on_add_and_del(tmp_path):
+    """追加・削除後もキャッシュが残り、読み上げ時にファイル読み込みの待ちが発生しない。"""
     store = DictionaryStore(tmp_path)
     assert store.get(GUILD).apply("abc") == "abc"
     store.add(GUILD, "abc", "えーびーしー")
-    assert store.get_cached(GUILD) is None
-    assert store.get(GUILD).apply("abc") == "えーびーしー"
-    assert store.get_cached(GUILD) is store.get(GUILD)  # 2回目以降はキャッシュ
+    cached = store.get_cached(GUILD)
+    assert cached is not None and cached.apply("abc") == "えーびーしー"
+    assert store.get(GUILD) is cached
     assert store.remove(GUILD, "abc") is True
-    assert store.get(GUILD).apply("abc") == "abc"
+    cached = store.get_cached(GUILD)
+    assert cached is not None and cached.apply("abc") == "abc"
+    # 別インスタンス（再起動相当）でもファイルから同じ内容が読める
+    assert DictionaryStore(tmp_path).get(GUILD).apply("abc") == "abc"
 
 
 def test_remove_unknown_word(tmp_path):
