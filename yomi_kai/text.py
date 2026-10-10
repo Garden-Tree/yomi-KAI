@@ -37,6 +37,10 @@ def compile_dictionary(words: Mapping[str, str]) -> WordDictionary:
 
 
 # --- 置換規則 ---
+# ```コードブロック```（言語指定付きも含む）。閉じていない ``` は対象外
+_CODE_BLOCK_RE = re.compile(r"```.*?```", flags=re.DOTALL)
+# `インラインコード` / ``インラインコード``
+_INLINE_CODE_RE = re.compile(r"(?<!`)(`{1,2})(?!`)([^\n]+?)(?<!`)\1(?!`)")
 _URL_RE = re.compile(r"https?://\S+")
 _SPOILER_RE = re.compile(r"\|\|.*?\|\|", flags=re.DOTALL)
 _USER_MENTION_RE = re.compile(r"<@!?([0-9]+)>")
@@ -47,6 +51,24 @@ _CUSTOM_EMOJI_RE = re.compile(r"<a?:(\w+):[0-9]+>")
 _ASTERISK_RE = re.compile(r"(?<!\*)(\*{1,3})(?=\S)(.+?)(?<=\S)\1(?!\*)")
 # _斜体_ / __下線__: Discord と同様、英数字に挟まれた `_`（例: snake_case_name）は対象外
 _UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])(_{1,2})([^_\n]+?)\1(?![A-Za-z0-9_])")
+
+
+CODE_BLOCK_TEXT = "コード省略"
+TRUNCATED_SUFFIX = " 以下略"
+
+
+def replace_code(text: str) -> str:
+    """コードブロックは「コード省略」に、インラインコードは中身だけにする。"""
+    text = _CODE_BLOCK_RE.sub(CODE_BLOCK_TEXT, text)
+    text = _INLINE_CODE_RE.sub(r"\2", text)
+    return text
+
+
+def truncate(text: str, max_length: int) -> str:
+    """``max_length`` 文字を超えたら切り詰めて「以下略」を付ける。0 以下なら無制限。"""
+    if max_length <= 0 or len(text) <= max_length:
+        return text
+    return text[:max_length].rstrip() + TRUNCATED_SUFFIX
 
 
 def replace_urls(text: str) -> str:
@@ -91,11 +113,15 @@ def build_read_text(
     user_name: NameResolver | None = None,
     role_name: NameResolver | None = None,
     channel_name: NameResolver | None = None,
+    max_length: int = 0,
 ) -> str:
     """メッセージ本文を読み上げ用に整形する。
 
-    処理順: 辞書置換 → URL → ネタバレ → メンション → サーバー絵文字 → マークダウン。
+    処理順: コード → 辞書置換 → URL → ネタバレ → メンション → サーバー絵文字 → マークダウン → 文字数制限。
+    コードを最初に処理するのは、コード内の文字列が辞書や URL として読まれないようにするため。
+    ``max_length`` が正なら、整形後の文字数で切り詰める（0 以下で無制限）。
     """
+    text = replace_code(text)
     if dictionary is not None:
         text = dictionary.apply(text)
     text = replace_urls(text)
@@ -103,7 +129,7 @@ def build_read_text(
     text = replace_mentions(text, user_name=user_name, role_name=role_name, channel_name=channel_name)
     text = replace_custom_emojis(text)
     text = strip_markdown(text)
-    return text
+    return truncate(text, max_length)
 
 
 def gen_sd_text(msg: str) -> str:

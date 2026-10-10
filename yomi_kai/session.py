@@ -74,11 +74,15 @@ class GuildSession:
         self.voice_client: VoiceClientLike | None = None
         self.text_channel: MessageableLike | None = None
         self._source_factory = source_factory
-        self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        # (テキスト, 話者, 世代)。skip_all で世代を進め、古い世代の項目は再生しない
+        self._queue: asyncio.Queue[tuple[str, str, int]] = asyncio.Queue()
+        self._epoch = 0
         self._worker: asyncio.Task[None] | None = None
         self._afk_task: asyncio.Task[None] | None = None
-        # ワーカーがキュー待ちで何も抱えていないとき True（合成中・再生中は False）
-        self._idle = True
+        # キューから取り出したが再生し終えていない件数（合成中・先読み済み・再生中）
+        self._in_flight = 0
+        # 再生前の1件を飛ばす指示（合成中に skip された場合）
+        self._skip_current = False
 
     # --- 状態 ---
     @property
@@ -148,41 +152,75 @@ class GuildSession:
         """読み上げキューに追加する。未接続なら何もせず False。AFKタイマーを張り直す。"""
         if not self.is_connected:
             return False
-        self._queue.put_nowait((text, self.speaker))
+        self._queue.put_nowait((text, self.speaker, self._epoch))
         self._reset_afk_timer()
         return True
+
+    def skip(self) -> bool:
+        """いま読み上げている（または合成中の）1件を飛ばして次へ進む。対象がなければ False。"""
+        voice_client = self.voice_client
+        if voice_client is None:
+            return False
+        if voice_client.is_playing():
+            voice_client.stop()  # after コールバック経由でワーカーが次へ進む
+            return True
+        if self._in_flight > 0:
+            self._skip_current = True  # 合成が終わっても再生しない
+            return True
+        return False
+
+    def skip_all(self) -> int:
+        """再生中・合成中・未再生のものをすべて読み上げ中止する。中止した件数を返す。"""
+        dropped = self._in_flight
+        while not self._queue.empty():
+            self._queue.get_nowait()
+            dropped += 1
+        self._epoch += 1  # 取り出し済み（合成中・先読み済み）の項目は再生時に世代で弾く
+        self._skip_current = False
+        voice_client = self.voice_client
+        if voice_client is not None and voice_client.is_playing():
+            voice_client.stop()
+        return dropped
 
     async def _synthesize(self, text: str, speaker: str) -> bytes:
         return await asyncio.to_thread(self.engine.synthesize, text, speaker)
 
     async def _run_worker(self) -> None:
         prefetched: asyncio.Task[bytes] | None = None
+        prefetched_epoch = self._epoch
         try:
             while True:
                 if prefetched is None:
-                    self._idle = True
-                    text, speaker = await self._queue.get()
-                    self._idle = False
+                    text, speaker, prefetched_epoch = await self._queue.get()
+                    self._in_flight += 1
                     prefetched = asyncio.create_task(self._synthesize(text, speaker))
-                current, prefetched = prefetched, None
+                current, current_epoch, prefetched = prefetched, prefetched_epoch, None
                 try:
-                    wav = await current
-                except Exception:
-                    logger.exception("音声合成に失敗しました (guild=%s)", self.guild_id)
-                    await self._notify(SYNTH_FAILED_NOTICE)
-                    wav = None
+                    try:
+                        wav = await current
+                    except Exception:
+                        logger.exception("音声合成に失敗しました (guild=%s)", self.guild_id)
+                        if current_epoch == self._epoch:
+                            await self._notify(SYNTH_FAILED_NOTICE)
+                        wav = None
 
-                # 再生中に次の1件だけ先行して合成しておく（再生順はキュー順のまま）
-                if not self._queue.empty():
-                    next_text, next_speaker = self._queue.get_nowait()
-                    prefetched = asyncio.create_task(self._synthesize(next_text, next_speaker))
+                    # 再生中に次の1件だけ先行して合成しておく（再生順はキュー順のまま）
+                    if not self._queue.empty():
+                        next_text, next_speaker, prefetched_epoch = self._queue.get_nowait()
+                        self._in_flight += 1
+                        prefetched = asyncio.create_task(self._synthesize(next_text, next_speaker))
 
-                if wav is not None:
-                    await self._play(wav)
+                    skipped = self._skip_current or current_epoch != self._epoch
+                    self._skip_current = False
+                    if wav is not None and not skipped:
+                        await self._play(wav)
+                finally:
+                    self._in_flight -= 1
         finally:
-            self._idle = True
             if prefetched is not None:
                 prefetched.cancel()
+            self._in_flight = 0
+            self._skip_current = False
 
     async def _play(self, wav: bytes) -> None:
         voice_client = self.voice_client
@@ -229,7 +267,7 @@ class GuildSession:
         """合成待ち・合成中・再生中のいずれかなら True。"""
         voice_client = self.voice_client
         playing = voice_client is not None and voice_client.is_playing()
-        return playing or not self._idle or not self._queue.empty()
+        return playing or self._in_flight > 0 or not self._queue.empty()
 
     async def _afk_timer(self) -> None:
         # 読み上げ中は切断せず、終わってからさらに AFK_TIME 待つ

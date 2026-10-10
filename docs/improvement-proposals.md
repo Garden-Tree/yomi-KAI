@@ -6,6 +6,8 @@
 > **バグ修正（旧A項目）は 2026-07-02 にすべて実装・動作確認済みのため本書から削除しました。**
 > 実装内容: TTS合成の非同期化、話者設定のサーバー別化、辞書置換の`.format()`クラッシュ修正、メンションのNoneガード、AFKタイマー再設計、音声ファイル削除タイミング修正、その他コマンドのクラッシュ対応など。詳細はコミット履歴を参照してください。
 
+> **B-3（文字数制限）・B-6（スキップ）・B-7（話者の動的列挙）・B-8（コードブロック除去）は 2026-10-10 に実装済みのため削除しました。**
+
 ---
 
 ## B. 機能追加案（優先度順）
@@ -28,17 +30,6 @@
   3. 既存プレフィックスコマンドは互換のため残す。
   4. 応答は `interaction.response.send_message` を使い、エラーは ephemeral にする。
 
-### B-3. 読み上げ文字数制限（「以下略」）
-
-- **概要:** 長文を全部読むと合成が重く、Google TTS なら課金も膨らむ。上限（既定 100 文字程度、config で変更可）を超えたら切り詰めて「以下略」を付ける。
-- **手順:**
-  1. `config.ini` に `MAX_READ_LENGTH = 100` を追加（`config.ini.example` も更新、`fallback` 付きで読む）。
-  2. `build_read_text` の最後（`return` の直前）に:
-     ```python
-     if len(read_msg) > MAX_READ_LENGTH:
-         read_msg = read_msg[:MAX_READ_LENGTH] + " 以下略"
-     ```
-
 ### B-4. 発言者名の読み上げ
 
 - **概要:** 「（名前）、こんにちは」のように誰の発言か分かるようにする。連続発言時は名前を省略。
@@ -53,26 +44,6 @@
 - **手順:**
   1. `on_voice_state_update` に追記。`before.channel != after.channel` かつ `voice_client.channel` が関係する場合に、読み上げテキストを生成して既存の合成→enqueue パスに流す。
   2. `on_message` 内の合成～enqueue 処理を `async def speak(guild, text)` として関数に切り出しておくと、ここから再利用できる。
-
-### B-6. 読み上げスキップコマンド（`y.s`）
-
-- **概要:** 誤爆した長文などを飛ばす。
-- **手順:**
-  1. `@bot.command()` で `s`（または `skip`）を追加（`@commands.guild_only()` を付ける）。
-  2. `ctx.guild.voice_client.stop()` を呼ぶだけで、`play` の `after` コールバックが次のキューを再生する。
-  3. 引数 `all` でキュー全消去（`queue_dict[ctx.guild.id].clear()` してから `stop()`）。
-
-### B-7. VOICEVOX話者の動的列挙
-
-- **概要:** 現在ずんだもん(style_id=3)・春日部つむぎ(8)が `VOICEVOX_STYLE_IDS` にハードコード。追加の .vvm を置くだけで Dropdown に反映されるようにする。
-- **手順:**
-  1. モデルロード時（`core.load_voice_model`）に `model.metas` から `(speaker_name, style_name, style_id)` を収集して `VOICEVOX_STYLE_IDS` を動的に構築。
-  2. `Dropdown.__init__` はこの dict から options を生成（Discord の Select は **25択まで**なので超える場合は先頭25件に制限するか、ページ分けする）。
-
-### B-8. コードブロックの読み上げ除去
-
-- **概要:** ```` ``` ```` で囲まれたコードを「コード省略」に置換する。
-- **手順:** `build_read_text` の URL置換の前に `read_msg = re.sub(r"```.*?```", "コード省略", read_msg, flags=re.DOTALL)` と、インラインコード `` `...` `` → `re.sub(r"`([^`]*)`", r"\1", read_msg)` を追加。
 
 ### B-9. 添付ファイル・スタンプの読み上げ
 

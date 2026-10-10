@@ -9,5 +9,7 @@ AFK_TIME = 1800
 SD_MSG = 突然の死
 ;y.sd を引数なしで実行したときに読み上げるメッセージ
 ;以下は任意項目
+MAX_READ_LENGTH = 100
+;読み上げる最大文字数。超えた分は「以下略」になります。0 で無制限
 ;VOICEVOX_LOAD_ALL_MODELS = False
 ;True にすると voicevox_core/models/vvms/ の *.vvm をすべて読み込みます（既定は 0.vvm のみ）

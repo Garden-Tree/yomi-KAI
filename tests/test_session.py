@@ -232,3 +232,75 @@ def test_afk_timer_waits_while_playing():
         assert ch.sent == [AFK_NOTICE]
 
     asyncio.run(run())
+
+
+# --- B-6 スキップ ---
+
+
+def test_skip_stops_current_and_continues():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        vc = FakeVoiceClient(auto_finish=False)  # stop() されるまで再生し続ける
+        await session.start(vc, FakeChannel())
+        session.enqueue("一")
+        session.enqueue("二")
+        await wait_until(lambda: len(vc.played) == 1)
+        assert session.skip()
+        await wait_until(lambda: len(vc.played) == 2)
+        assert vc.played == ["ずんだもん:一".encode(), "ずんだもん:二".encode()]
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_skip_while_synthesizing_drops_that_message():
+    async def run():
+        session, _ = make_session(FakeEngine(delays={"遅い": 0.3}))
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+        session.enqueue("遅い")
+        await asyncio.sleep(0.05)  # まだ合成中で再生は始まっていない
+        assert not vc.is_playing()
+        assert session.skip()
+        session.enqueue("次")
+        await wait_until(lambda: len(vc.played) == 1)
+        await asyncio.sleep(0.1)
+        assert vc.played == ["ずんだもん:次".encode()]
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_skip_with_nothing_to_read():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        await session.start(FakeVoiceClient(), FakeChannel())
+        assert not session.skip()
+        assert session.skip_all() == 0
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_skip_all_drops_playing_prefetched_and_queued():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        vc = FakeVoiceClient(auto_finish=False)
+        await session.start(vc, FakeChannel())
+        for t in ("一", "二", "三", "四"):
+            session.enqueue(t)
+        await wait_until(lambda: len(vc.played) == 1)
+        await asyncio.sleep(0.05)  # 「二」が先読み合成される
+        assert session.skip_all() == 4  # 再生中1 + 先読み1 + 待ち2
+        await asyncio.sleep(0.1)
+        assert vc.played == ["ずんだもん:一".encode()]  # 先読み済みの「二」も再生されない
+        assert not session.is_busy
+
+        # スキップ後に来たメッセージは普通に読まれる
+        vc.auto_finish = True
+        session.enqueue("五")
+        await wait_until(lambda: len(vc.played) == 2)
+        assert vc.played[-1] == "ずんだもん:五".encode()
+        await session.close()
+
+    asyncio.run(run())

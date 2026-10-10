@@ -60,6 +60,11 @@ class VoiceCog(commands.Cog):
         help_embed.add_field(name=f"{prefix}c", value="発言者と同じボイスチャンネルに接続します。", inline=False)
         help_embed.add_field(name=f"{prefix}dc", value="ボイスチャンネルから切断します。", inline=False)
         help_embed.add_field(
+            name=f"{prefix}s",
+            value=f"読み上げ中のメッセージを飛ばします。`{prefix}s all`で溜まっている分もすべて飛ばします。",
+            inline=False,
+        )
+        help_embed.add_field(
             name=f"{prefix}dict",
             value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。",
             inline=False,
@@ -122,6 +127,33 @@ class VoiceCog(commands.Cog):
         await ctx.channel.send("切断しました")
         logger.info("切断しました")
 
+    @commands.command(name="s")
+    @commands.guild_only()
+    async def skip(self, ctx: commands.Context, *args: str) -> None:
+        session = self.sessions.get(ctx.guild.id)
+        if session is None or not session.is_connected:
+            await ctx.channel.send("ボイスチャンネルに接続していません")
+            return
+
+        if not args:
+            if session.skip():
+                await ctx.channel.send("スキップしました")
+                logger.info("読み上げをスキップしました (guild=%s)", ctx.guild.id)
+            else:
+                await ctx.channel.send("読み上げ中のメッセージはありません")
+            return
+
+        if args == ("all",):
+            dropped = session.skip_all()
+            if dropped:
+                await ctx.channel.send(f"読み上げを{dropped}件スキップしました")
+                logger.info("読み上げを%d件スキップしました (guild=%s)", dropped, ctx.guild.id)
+            else:
+                await ctx.channel.send("読み上げ中のメッセージはありません")
+            return
+
+        await ctx.channel.send(f"コマンドが間違っています。`{self.config.prefix}help`を参照してください")
+
     # --- イベント ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -153,6 +185,7 @@ class VoiceCog(commands.Cog):
             user_name=lambda i: m.display_name if (m := guild.get_member(i)) else None,
             role_name=lambda i: r.name if (r := guild.get_role(i)) else None,
             channel_name=lambda i: c.name if (c := guild.get_channel(i)) else None,
+            max_length=self.config.max_read_length,
         )
 
         # 空メッセージ（添付ファイルのみ等）は読み上げをスキップ
