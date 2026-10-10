@@ -9,13 +9,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
-import tempfile
 import threading
 from pathlib import Path
 
+from .jsonfile import read_json_object, write_json_atomic
 from .text import WordDictionary, compile_dictionary
 
 logger = logging.getLogger(__name__)
@@ -33,13 +31,7 @@ class DictionaryStore:
     # --- 読み込み ---
     def _read_words(self, guild_id: int) -> dict[str, str]:
         """ファイルから辞書を読む。ファイルが無ければ空。壊れていれば例外を送出する。"""
-        path = self.path_for(guild_id)
-        if not path.is_file():
-            return {}
-        with path.open("r", encoding="UTF-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            raise ValueError(f"{path} の形式が不正です（オブジェクトではありません）")
+        data = read_json_object(self.path_for(guild_id))
         return {str(k): str(v) for k, v in data.items()}
 
     def get_cached(self, guild_id: int) -> WordDictionary | None:
@@ -77,21 +69,7 @@ class DictionaryStore:
     # --- 書き込み ---
     def _write_words(self, guild_id: int, words: dict[str, str]) -> None:
         """一時ファイルに書いてから os.replace で差し替える（書き込み途中で壊れない）。"""
-        self._dir.mkdir(parents=True, exist_ok=True)
-        path = self.path_for(guild_id)
-        fd, tmp_name = tempfile.mkstemp(prefix=f".{guild_id}.", suffix=".tmp", dir=self._dir)
-        try:
-            with os.fdopen(fd, "w", encoding="UTF-8") as f:
-                f.write(json.dumps(words, indent=2, ensure_ascii=False))
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_name, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+        write_json_atomic(self.path_for(guild_id), words)
 
     def add(self, guild_id: int, word: str, reading: str) -> None:
         with self._lock:

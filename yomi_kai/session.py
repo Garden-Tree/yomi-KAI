@@ -1,7 +1,8 @@
 """サーバー（ギルド）ごとの読み上げセッション。
 
-1サーバーにつき1つの :class:`GuildSession` が、ボイスクライアント・選択中の話者・
+1サーバーにつき1つの :class:`GuildSession` が、ボイスクライアント・
 読み上げキュー・ワーカータスク・AFKタイマーを保持する。
+話者・速度はメッセージごとに呼び出し側（``settings.resolve_voice``）が決めて ``enqueue`` に渡す。
 
 ワーカーはキューから取り出したテキストをスレッドで合成し（``asyncio.to_thread``）、
 1件ずつ順番に再生する。再生中に次の1件だけ先行して合成するが、再生順は必ずキュー投入順になる。
@@ -70,12 +71,11 @@ class GuildSession:
         self.guild_id = guild_id
         self.engine = engine
         self.afk_time = afk_time
-        self.speaker: str = engine.default_speaker
         self.voice_client: VoiceClientLike | None = None
         self.text_channel: MessageableLike | None = None
         self._source_factory = source_factory
-        # (テキスト, 話者, 世代)。skip_all で世代を進め、古い世代の項目は再生しない
-        self._queue: asyncio.Queue[tuple[str, str, int]] = asyncio.Queue()
+        # (テキスト, 話者, 速度, 世代)。skip_all で世代を進め、古い世代の項目は再生しない
+        self._queue: asyncio.Queue[tuple[str, str, float, int]] = asyncio.Queue()
         self._epoch = 0
         self._worker: asyncio.Task[None] | None = None
         self._afk_task: asyncio.Task[None] | None = None
@@ -148,11 +148,11 @@ class GuildSession:
                     logger.exception("切断通知の送信に失敗しました (guild=%s)", self.guild_id)
 
     # --- 読み上げ ---
-    def enqueue(self, text: str) -> bool:
+    def enqueue(self, text: str, speaker: str, speed: float = 1.0) -> bool:
         """読み上げキューに追加する。未接続なら何もせず False。AFKタイマーを張り直す。"""
         if not self.is_connected:
             return False
-        self._queue.put_nowait((text, self.speaker, self._epoch))
+        self._queue.put_nowait((text, speaker, speed, self._epoch))
         self._reset_afk_timer()
         return True
 
@@ -182,8 +182,8 @@ class GuildSession:
             voice_client.stop()
         return dropped
 
-    async def _synthesize(self, text: str, speaker: str) -> bytes:
-        return await asyncio.to_thread(self.engine.synthesize, text, speaker)
+    async def _synthesize(self, text: str, speaker: str, speed: float) -> bytes:
+        return await asyncio.to_thread(self.engine.synthesize, text, speaker, speed)
 
     async def _run_worker(self) -> None:
         prefetched: asyncio.Task[bytes] | None = None
@@ -191,9 +191,9 @@ class GuildSession:
         try:
             while True:
                 if prefetched is None:
-                    text, speaker, prefetched_epoch = await self._queue.get()
+                    text, speaker, speed, prefetched_epoch = await self._queue.get()
                     self._in_flight += 1
-                    prefetched = asyncio.create_task(self._synthesize(text, speaker))
+                    prefetched = asyncio.create_task(self._synthesize(text, speaker, speed))
                 current, current_epoch, prefetched = prefetched, prefetched_epoch, None
                 try:
                     try:
@@ -206,9 +206,9 @@ class GuildSession:
 
                     # 再生中に次の1件だけ先行して合成しておく（再生順はキュー順のまま）
                     if not self._queue.empty():
-                        next_text, next_speaker, prefetched_epoch = self._queue.get_nowait()
+                        next_text, next_speaker, next_speed, prefetched_epoch = self._queue.get_nowait()
                         self._in_flight += 1
-                        prefetched = asyncio.create_task(self._synthesize(next_text, next_speaker))
+                        prefetched = asyncio.create_task(self._synthesize(next_text, next_speaker, next_speed))
 
                     skipped = self._skip_current or current_epoch != self._epoch
                     self._skip_current = False

@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from .config import Config, ConfigError, load_config
 from .dictionary import DictionaryStore
+from .settings import SettingsStore
 from .tts import TTSEngine
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def build_engine(config: Config) -> TTSEngine:
 
 
 class YomiBot(commands.Bot):
-    def __init__(self, config: Config, engine: TTSEngine, store: DictionaryStore) -> None:
+    def __init__(self, config: Config, engine: TTSEngine, store: DictionaryStore, settings: SettingsStore) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
@@ -41,16 +42,21 @@ class YomiBot(commands.Bot):
         self.config = config
         self.engine = engine
         self.store = store
+        self.settings = settings
 
     async def setup_hook(self) -> None:
         from .cogs.dictionary import DictionaryCog
         from .cogs.misc import MiscCog
+        from .cogs.settings import SettingsCog
         from .cogs.voice import VoiceCog
         from .session import ffmpeg_source_factory, find_ffmpeg
 
         ffmpeg_path = find_ffmpeg()
         logger.debug("ffmpeg: %s", ffmpeg_path)
-        await self.add_cog(VoiceCog(self, self.config, self.engine, self.store, ffmpeg_source_factory(ffmpeg_path)))
+        await self.add_cog(
+            VoiceCog(self, self.config, self.engine, self.store, self.settings, ffmpeg_source_factory(ffmpeg_path))
+        )
+        await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))
         await self.add_cog(MiscCog(self, self.config))
 
@@ -87,7 +93,8 @@ def main(config_path: str = "config.ini") -> None:
         sys.exit(1)
 
     Path("dict").mkdir(exist_ok=True)
-    bot = YomiBot(config, engine, DictionaryStore("dict"))
+    Path("settings").mkdir(exist_ok=True)
+    bot = YomiBot(config, engine, DictionaryStore("dict"), SettingsStore("settings"))
     try:
         # ログ設定は setup_logging で済んでいるので、discord.py 独自のハンドラは付けない（二重出力防止）
         bot.run(config.discord_token, log_handler=None)

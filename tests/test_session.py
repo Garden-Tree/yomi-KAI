@@ -7,6 +7,9 @@ import time
 from yomi_kai.session import AFK_NOTICE, SYNTH_FAILED_NOTICE, GuildSession
 from yomi_kai.tts import Speaker
 
+ZUNDA = "ずんだもん"
+TSUMUGI = "春日部つむぎ"
+
 
 class FakeEngine:
     """テキストごとに合成時間を変えられる偽エンジン。"""
@@ -18,13 +21,13 @@ class FakeEngine:
 
     @property
     def default_speaker(self):
-        return "ずんだもん"
+        return ZUNDA
 
     def speakers(self):
-        return [Speaker("ずんだもん", "fake"), Speaker("春日部つむぎ", "fake")]
+        return [Speaker(ZUNDA, "fake"), Speaker(TSUMUGI, "fake")]
 
-    def synthesize(self, text, speaker):
-        self.calls.append((text, speaker))
+    def synthesize(self, text, speaker, speed=1.0):
+        self.calls.append((text, speaker, speed))
         time.sleep(self.delays.get(text, 0))
         if text in self.fail:
             raise RuntimeError("synthesis failed")
@@ -117,18 +120,35 @@ def test_plays_in_enqueue_order_even_if_synthesis_speed_differs():
         vc, ch = FakeVoiceClient(), FakeChannel()
         await session.start(vc, ch)
 
-        assert session.enqueue("一")
-        assert session.enqueue("二")
-        session.speaker = "春日部つむぎ"
-        assert session.enqueue("三")
+        assert session.enqueue("一", ZUNDA)
+        assert session.enqueue("二", ZUNDA)
+        assert session.enqueue("三", TSUMUGI)
 
         await wait_until(lambda: len(vc.played) == 3 and not vc.is_playing())
-        assert vc.played == ["ずんだもん:一".encode(), "ずんだもん:二".encode(), "春日部つむぎ:三".encode()]
+        assert vc.played == [f"{ZUNDA}:一".encode(), f"{ZUNDA}:二".encode(), f"{TSUMUGI}:三".encode()]
         # ソースは再生直前に1件ずつ生成される
         assert created == vc.played
         await session.close()
         assert vc.disconnected
         assert not session.is_connected
+
+    asyncio.run(run())
+
+
+def test_speaker_and_speed_reach_engine():
+    async def run():
+        engine = FakeEngine()
+        session, _ = make_session(engine)
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+
+        session.enqueue("一", TSUMUGI, 1.5)
+        session.enqueue("二", ZUNDA)  # 速度省略時は 1.0
+        session.enqueue("三", ZUNDA, 0.5)
+
+        await wait_until(lambda: len(vc.played) == 3 and not vc.is_playing())
+        assert engine.calls == [("一", TSUMUGI, 1.5), ("二", ZUNDA, 1.0), ("三", ZUNDA, 0.5)]
+        await session.close()
 
     asyncio.run(run())
 
@@ -140,7 +160,7 @@ def test_close_drains_queue_and_stops_playback():
         vc, ch = FakeVoiceClient(auto_finish=False), FakeChannel()  # 再生が終わらない
         await session.start(vc, ch)
         for text in ("一", "二", "三"):
-            session.enqueue(text)
+            session.enqueue(text, ZUNDA)
 
         await wait_until(lambda: len(vc.played) == 1)
         await session.close()
@@ -150,25 +170,25 @@ def test_close_drains_queue_and_stops_playback():
         assert session.pending == 0
         assert len(vc.played) == 1
         assert session._worker is None
-        assert not session.enqueue("四")  # 切断後は受け付けない
+        assert not session.enqueue("四", ZUNDA)  # 切断後は受け付けない
         assert ch.sent == []  # dc では通知しない（コマンド側が送る）
         await session.close()  # 2回目も安全
 
     asyncio.run(run())
 
 
-def test_reconnect_after_close_keeps_speaker():
+def test_reconnect_after_close_reads_again():
+    # 話者の保持は SettingsStore 側の責務（tests/test_settings.py）。ここでは再接続後も読み上げられることを確認する
     async def run():
         session, _ = make_session(FakeEngine())
         await session.start(FakeVoiceClient(), FakeChannel())
-        session.speaker = "春日部つむぎ"
         await session.close()
 
         vc = FakeVoiceClient()
         await session.start(vc, FakeChannel())
-        session.enqueue("やあ")
+        session.enqueue("やあ", TSUMUGI)
         await wait_until(lambda: len(vc.played) == 1)
-        assert vc.played == ["春日部つむぎ:やあ".encode()]
+        assert vc.played == [f"{TSUMUGI}:やあ".encode()]
         await session.close()
 
     asyncio.run(run())
@@ -180,9 +200,9 @@ def test_synthesis_failure_notifies_and_continues():
         vc, ch = FakeVoiceClient(), FakeChannel()
         await session.start(vc, ch)
         for text in ("一", "二", "三"):
-            session.enqueue(text)
+            session.enqueue(text, ZUNDA)
         await wait_until(lambda: len(vc.played) == 2 and not vc.is_playing())
-        assert vc.played == ["ずんだもん:一".encode(), "ずんだもん:三".encode()]
+        assert vc.played == [f"{ZUNDA}:一".encode(), f"{ZUNDA}:三".encode()]
         assert ch.sent == [SYNTH_FAILED_NOTICE]
         await session.close()
 
@@ -208,7 +228,7 @@ def test_afk_timer_resets_on_enqueue():
         await session.start(vc, ch)
         for _ in range(4):
             await asyncio.sleep(0.1)
-            session.enqueue("まだいるよ")
+            session.enqueue("まだいるよ", ZUNDA)
         assert not vc.disconnected  # 合計0.4秒経過しているがタイマーは張り直されている
         await wait_until(lambda: vc.disconnected)
         assert ch.sent == [AFK_NOTICE]
@@ -223,12 +243,12 @@ def test_afk_timer_waits_while_playing():
         session, _ = make_session(FakeEngine(), afk_time=0.1)
         vc, ch = FakeVoiceClient(play_time=0.35), FakeChannel()
         await session.start(vc, ch)
-        session.enqueue("長い一")
-        session.enqueue("長い二")
+        session.enqueue("長い一", ZUNDA)
+        session.enqueue("長い二", ZUNDA)
         await asyncio.sleep(0.5)  # AFK 時間を大きく超えるが、まだ2件目を再生中
         assert not vc.disconnected
         await wait_until(lambda: vc.disconnected, timeout=3.0)
-        assert vc.played == ["ずんだもん:長い一".encode(), "ずんだもん:長い二".encode()]
+        assert vc.played == [f"{ZUNDA}:長い一".encode(), f"{ZUNDA}:長い二".encode()]
         assert ch.sent == [AFK_NOTICE]
 
     asyncio.run(run())
@@ -242,12 +262,12 @@ def test_skip_stops_current_and_continues():
         session, _ = make_session(FakeEngine())
         vc = FakeVoiceClient(auto_finish=False)  # stop() されるまで再生し続ける
         await session.start(vc, FakeChannel())
-        session.enqueue("一")
-        session.enqueue("二")
+        session.enqueue("一", ZUNDA)
+        session.enqueue("二", ZUNDA)
         await wait_until(lambda: len(vc.played) == 1)
         assert session.skip()
         await wait_until(lambda: len(vc.played) == 2)
-        assert vc.played == ["ずんだもん:一".encode(), "ずんだもん:二".encode()]
+        assert vc.played == [f"{ZUNDA}:一".encode(), f"{ZUNDA}:二".encode()]
         await session.close()
 
     asyncio.run(run())
@@ -258,14 +278,14 @@ def test_skip_while_synthesizing_drops_that_message():
         session, _ = make_session(FakeEngine(delays={"遅い": 0.3}))
         vc = FakeVoiceClient()
         await session.start(vc, FakeChannel())
-        session.enqueue("遅い")
+        session.enqueue("遅い", ZUNDA)
         await asyncio.sleep(0.05)  # まだ合成中で再生は始まっていない
         assert not vc.is_playing()
         assert session.skip()
-        session.enqueue("次")
+        session.enqueue("次", ZUNDA)
         await wait_until(lambda: len(vc.played) == 1)
         await asyncio.sleep(0.1)
-        assert vc.played == ["ずんだもん:次".encode()]
+        assert vc.played == [f"{ZUNDA}:次".encode()]
         await session.close()
 
     asyncio.run(run())
@@ -288,19 +308,19 @@ def test_skip_all_drops_playing_prefetched_and_queued():
         vc = FakeVoiceClient(auto_finish=False)
         await session.start(vc, FakeChannel())
         for t in ("一", "二", "三", "四"):
-            session.enqueue(t)
+            session.enqueue(t, ZUNDA)
         await wait_until(lambda: len(vc.played) == 1)
         await asyncio.sleep(0.05)  # 「二」が先読み合成される
         assert session.skip_all() == 4  # 再生中1 + 先読み1 + 待ち2
         await asyncio.sleep(0.1)
-        assert vc.played == ["ずんだもん:一".encode()]  # 先読み済みの「二」も再生されない
+        assert vc.played == [f"{ZUNDA}:一".encode()]  # 先読み済みの「二」も再生されない
         assert not session.is_busy
 
         # スキップ後に来たメッセージは普通に読まれる
         vc.auto_finish = True
-        session.enqueue("五")
+        session.enqueue("五", ZUNDA)
         await wait_until(lambda: len(vc.played) == 2)
-        assert vc.played[-1] == "ずんだもん:五".encode()
+        assert vc.played[-1] == f"{ZUNDA}:五".encode()
         await session.close()
 
     asyncio.run(run())

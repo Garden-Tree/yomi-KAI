@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -10,6 +11,7 @@ from discord.ext import commands
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
+from ..settings import SettingsStore, resolve_voice
 from ..text import build_read_text
 from ..tts import TTSEngine
 from ..ui import DropdownView
@@ -17,6 +19,7 @@ from ..ui import DropdownView
 logger = logging.getLogger(__name__)
 
 EMBED_COLOR = 0x3399CC
+SAVE_FAILED_NOTICE = "設定の保存に失敗しました"
 
 
 class VoiceCog(commands.Cog):
@@ -26,12 +29,15 @@ class VoiceCog(commands.Cog):
         config: Config,
         engine: TTSEngine,
         store: DictionaryStore,
+        settings: SettingsStore,
         source_factory: SourceFactory,
     ) -> None:
         self.bot = bot
         self.config = config
         self.engine = engine
         self.store = store
+        self.settings = settings
+        self.available_speakers = frozenset(s.name for s in engine.speakers())
         self.source_factory = source_factory
         # guild.id -> GuildSession（サーバーごとの状態はここにだけ持つ）
         self.sessions: dict[int, GuildSession] = {}
@@ -65,6 +71,19 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(
+            name=f"{prefix}voice",
+            value=f"自分の話者を選びます。`{prefix}voice reset`で個人設定を解除し、サーバーの話者に戻します。",
+            inline=False,
+        )
+        help_embed.add_field(
+            name=f"{prefix}speed `倍率`",
+            value=(
+                "自分の読み上げ速度を0.5〜2.0倍で設定します。"
+                f"`{prefix}speed`で現在の速度を表示、`{prefix}speed reset`で解除します。"
+            ),
+            inline=False,
+        )
+        help_embed.add_field(
             name=f"{prefix}dict",
             value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。",
             inline=False,
@@ -93,13 +112,23 @@ class VoiceCog(commands.Cog):
         else:
             voice_client = await voice_channel.connect()
 
-        session = self.get_session(ctx.guild.id)
+        guild_id = ctx.guild.id
+        session = self.get_session(guild_id)
         await session.start(voice_client, ctx.channel)
 
-        def select_speaker(name: str) -> None:
-            session.speaker = name
+        async def select_server_speaker(interaction: discord.Interaction, name: str) -> None:
+            try:
+                await asyncio.to_thread(self.settings.set_guild_speaker, guild_id, name)
+            except Exception:
+                logger.exception("サーバーの話者の保存に失敗しました (guild=%s)", guild_id)
+                await interaction.response.send_message(SAVE_FAILED_NOTICE, ephemeral=True)
+                return
+            await interaction.response.send_message(f"{name}が選択されました")
+            logger.info("サーバーの話者を%sに変更しました (guild=%s)", name, guild_id)
 
-        view = DropdownView(self.engine.speakers(), session.speaker, select_speaker)
+        settings = await self.settings.aget(guild_id)
+        current = settings.speaker if settings.speaker in self.available_speakers else self.engine.default_speaker
+        view = DropdownView(self.engine.speakers(), f"サーバーの話者: {current}", select_server_speaker)
         await ctx.send("話者を選んでください", view=view)
         connected_embed = discord.Embed(title="読み上げ開始", color=EMBED_COLOR)
         connected_embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline=False)
@@ -192,8 +221,14 @@ class VoiceCog(commands.Cog):
         if not read_msg.strip():
             return
 
-        if session.enqueue(read_msg):
-            logger.info("読み上げキューに追加しました (guild=%s, %d文字)", guild.id, len(read_msg))
+        settings = await self.settings.aget(guild.id)
+        speaker, speed = resolve_voice(
+            settings, message.author.id, self.available_speakers, self.engine.default_speaker
+        )
+        if session.enqueue(read_msg, speaker, speed):
+            logger.info(
+                "読み上げキューに追加しました (guild=%s, %d文字, %s, %s倍)", guild.id, len(read_msg), speaker, speed
+            )
             logger.debug("ReadSentence:%s", read_msg)
 
     @commands.Cog.listener()

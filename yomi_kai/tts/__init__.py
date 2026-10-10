@@ -25,14 +25,17 @@ class Speaker:
 
 @runtime_checkable
 class TTSEngine(Protocol):
-    """音声合成エンジン。``synthesize`` はブロッキングで、WAV のバイト列を返す。"""
+    """音声合成エンジン。``synthesize`` はブロッキングで、WAV のバイト列を返す。
+
+    ``speed`` は話速の倍率（1.0 が標準）。
+    """
 
     @property
     def default_speaker(self) -> str: ...
 
     def speakers(self) -> list[Speaker]: ...
 
-    def synthesize(self, text: str, speaker: str) -> bytes: ...
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes: ...
 
 
 class CompositeEngine:
@@ -64,10 +67,10 @@ class CompositeEngine:
     def speakers(self) -> list[Speaker]:
         return list(self._speakers)
 
-    def synthesize(self, text: str, speaker: str) -> bytes:
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
         engine = self._owner.get(speaker)
         if engine is None:
             logger.warning("未知の話者 %s が指定されたため %s で読み上げます", speaker, self._default)
             speaker = self._default
             engine = self._owner[speaker]
-        return engine.synthesize(text, speaker)
+        return engine.synthesize(text, speaker, speed)
