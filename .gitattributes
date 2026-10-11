@@ -1,0 +1,2 @@
+# シェルスクリプトは Linux サーバーで実行するため常に LF
+*.sh text eol=lf

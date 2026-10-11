@@ -9,3 +9,14 @@ log/
 temp/
 config.ini
 voicevox_core/
+# 実行時はボリュームでマウントするデータ（イメージに含めない）
+dict/
+settings/
+# 実行に不要なもの
+.github/
+docs/
+tests/
+scripts/
+.pytest_cache/
+.ruff_cache/
+*.log

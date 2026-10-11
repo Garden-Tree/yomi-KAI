@@ -1,12 +1,15 @@
 services:
   yomi-kai:
     build: .
+    # scripts/deploy.sh がこの名前を前提に、ロールバック用のタグ(yomi-kai:previous)を管理する
+    image: yomi-kai:latest
     container_name: yomi-kai
     restart: unless-stopped
     volumes:
       # 設定ファイル
       - ./config.ini:/app/config.ini:ro
-      # 辞書データとログを永続化
+      # 辞書データ・サーバーごとの設定・ログを永続化
       - ./dict:/app/dict
+      - ./settings:/app/settings
       - ./log:/app/log
     # Google TTSを使用する場合は、config.iniにAPIキーを設定し、USE_GOOGLE_TTS=Trueに変更してください。
