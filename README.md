@@ -172,6 +172,10 @@ ruff check .
 
 GitHub Actions でも `main` / `develop` への push とプルリクエストごとに同じチェックが実行されます。
 
+### リリース
+
+Actions タブの「Release」からバージョンを入力して実行すると、Windows 版の ZIP を添付した下書きリリースが作成されます。リリースノートを清書・確認してから公開してください。詳しくは [docs/architecture.md の「リリース」](./docs/architecture.md) を参照してください。
+
 ## 作者
 
 GardenTree [[Twitter]](https://twitter.com/Garden__Tree)
