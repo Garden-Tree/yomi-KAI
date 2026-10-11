@@ -19,19 +19,19 @@ build_cache/ にキャッシュされます。事前の手動配置作業は不�
     ├── config.ini.example   ... 設定ファイルのサンプル
     ├── README.md
     └── lib/                 ... ユーザーが直接触れないファイル群
-         ├── yomi-KAI.py
+         ├── yomi-KAI.py         ... 起動スクリプト (パス解決のみ)
+         ├── yomi_kai/           ... Bot本体のパッケージ
          ├── ffmpeg.exe          ... FFmpeg バイナリ (自動ダウンロード)
          ├── voicevox_core/      ... モデル・辞書・ONNXランタイム (自動ダウンロード)
          ├── packages/           ... Pythonパッケージ群 (自動インストール)
          └── python/             ... Python Embeddable本体 (自動ダウンロード)
 """
 
-import sys
-import os
 import shutil
-import zipfile
 import subprocess
+import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 
 # ================================================================
@@ -82,6 +82,8 @@ step("Step 0: 事前チェック")
 errors = []
 if not Path("./yomi-KAI.py").exists():
     errors.append("yomi-KAI.py が見つかりません。ビルドはプロジェクトルートから実行してください。")
+if not Path("./yomi_kai/main.py").exists():
+    errors.append("yomi_kai/ パッケージが見つかりません。ビルドはプロジェクトルートから実行してください。")
 
 if errors:
     print("\n[ERROR] ビルドを開始できません:")
@@ -211,17 +213,17 @@ else:
 # ダウンローダーがまだ実行されていない場合のみ実行
 if not (vvc_cache_dir / "onnxruntime").exists():
     vvc_cache_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # エンジン・辞書のダウンロード (c-apiとmodelsを除外)
     cmd_engine = [str(downloader_exe), "-o", str(vvc_cache_dir), "--exclude", "c-api", "--exclude", "models"]
     print("  voicevox_core エンジンダウンロード中...")
     subprocess.run(cmd_engine, input=b"y\n", check=True)
-    
+
     # 0.vvmのみダウンロード
     cmd_model = [str(downloader_exe), "-o", str(vvc_cache_dir), "--only", "models", "--models-pattern", "0.vvm"]
     print("  voicevox_core 音声モデル(0.vvm)ダウンロード中...")
     subprocess.run(cmd_model, input=b"y\n", check=True)
-        
+
     check(f"voicevox_core ダウンロード完了: {vvc_cache_dir}")
 else:
     check(f"キャッシュを使用: {vvc_cache_dir}")
@@ -233,14 +235,15 @@ step("Step 6: アセットをコピー")
 
 # プログラム本体
 shutil.copy("./yomi-KAI.py", LIB_DIR / "yomi-KAI.py")
-check("yomi-KAI.py → lib/")
+shutil.copytree("./yomi_kai", LIB_DIR / "yomi_kai", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+check("yomi-KAI.py, yomi_kai/ → lib/")
 
 # ffmpeg.exe
 shutil.copy(str(ffmpeg_src), LIB_DIR / "ffmpeg.exe")
 check(f"ffmpeg.exe → lib/ (v{FFMPEG_VERSION})")
 
 # voicevox_core: onnxruntime, dict, および models の 0.vvm のみをコピー
-print(f"  voicevox_core をコピー中...")
+print("  voicevox_core をコピー中...")
 vvc_dest = LIB_DIR / "voicevox_core"
 vvc_dest.mkdir(parents=True)
 
@@ -255,7 +258,7 @@ shutil.copy(str(vvc_cache_dir / "models/vvms/0.vvm"), str(vvc_dest / "models/vvm
 for f in (vvc_cache_dir / "models").glob("*.txt"):
     shutil.copy(str(f), str(vvc_dest / "models" / f.name))
 
-check(f"voicevox_core → lib/voicevox_core/ (0.vvmのみを同梱)")
+check("voicevox_core → lib/voicevox_core/ (0.vvmのみを同梱)")
 
 # ユーザー向けファイル
 shutil.copy("./config.ini.example", DIST_ROOT / "config.ini.example")
@@ -288,7 +291,7 @@ with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     for file in DIST_ROOT.rglob("*"):
         arcname = file.relative_to(Path("./dist"))
         zf.write(file, arcname)
-        
+
 check(f"ZIPを生成しました: {zip_path}")
 
 # ================================================================

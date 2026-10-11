@@ -1,0 +1,115 @@
+name: Release
+on:
+  # Actions タブの「Run workflow」からバージョンを入力して実行 → 下書きリリースを作成
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "バージョン（例: 3.2 / 3.2.1。先頭の v は不要）"
+        required: true
+        type: string
+  # Windows 版のビルドに影響する変更は、プルリクエストでビルドだけ試す（リリースは作らない）
+  pull_request:
+    paths:
+      - build.py
+      - requirements.txt
+      - yomi-KAI.py
+      - .github/workflows/release.yml
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # 既定の文字コード(cp1252)だと日本語の出力で落ちるため
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      VERSION_INPUT: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "version=ci-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version="${VERSION_INPUT#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::バージョンの形式が不正です: '$VERSION_INPUT'（例: 3.2 / 3.2.1）"
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "::error::リリースは main ブランチから実行してください（現在: ${GITHUB_REF}）"
+            exit 1
+          fi
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::v$version のリリース（下書きを含む）はすでに存在します"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "::error::タグ v$version はすでに存在します"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Python Embeddable / FFmpeg / VOICEVOX などのダウンロード物を使い回す
+      - uses: actions/cache@v4
+        with:
+          path: build_cache
+          key: build-cache-${{ hashFiles('build.py') }}
+          restore-keys: build-cache-
+
+      - name: Build
+        run: python build.py "${{ steps.version.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yomi-KAI-v${{ steps.version.outputs.version }}
+          path: dist/yomi-KAI-v${{ steps.version.outputs.version }}.zip
+          retention-days: ${{ github.event_name == 'workflow_dispatch' && 30 || 3 }}
+          compression-level: 0 # すでに zip なので再圧縮しない
+
+  draft-release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # リリースの作成に必要な権限はこのジョブだけに与える
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: yomi-KAI-v${{ needs.build.outputs.version }}
+
+      # 下書きとして作成する。公開ボタンを押すまで一般には見えず、タグも公開時に作られる。
+      # リリースノートはひとまず GitHub の自動生成。Claude Code で清書してから公開する。
+      - name: Create draft release
+        run: |
+          gh release create "v$VERSION" "yomi-KAI-v$VERSION.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --generate-notes
+          url="$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json url --jq .url)"
+          {
+            echo "## 下書きリリースを作成しました: v$VERSION"
+            echo ""
+            echo "- $url"
+            echo "- リリースノートを清書し、内容を確認してから公開してください。"
+          } >> "$GITHUB_STEP_SUMMARY"

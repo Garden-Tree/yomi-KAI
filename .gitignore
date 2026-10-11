@@ -133,6 +133,7 @@ dmypy.json
 # yomi-KAI
 *.json
 dict/
+settings/
 log/
 temp/
 yomi-KAI-v*/

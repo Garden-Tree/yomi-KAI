@@ -1,19 +1,35 @@
 name: Deploy
 on:
-  push:
+  # main への push で CI が走り、それが成功したときだけデプロイする
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
+permissions:
+  contents: read
 concurrency: deploy # 連続マージ時に多重実行しない
 jobs:
   deploy:
+    # - CI が成功していること
+    # - main への push（自リポジトリ）であること。
+    #   workflow_run の branches はフォークの PR のブランチ名でも一致してしまうため、event と
+    #   リポジトリでも絞る（セルフホストランナーで外部のコードを実行させないため）
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     # 自宅サーバー(Proxmox VE LXC)上のセルフホストランナーで実行される。
-    # セキュリティ上、self-hostedランナーはこのワークフロー(push: main)以外で使わないこと。
+    # セキュリティ上、self-hostedランナーはこのワークフロー以外で使わないこと。
     runs-on: [self-hosted, deploy]
     steps:
-      - name: Pull and restart
+      - name: Deploy, health check and rollback
         # config.ini等が置かれた運用ディレクトリを直接更新する(checkoutは使わない)
+        # CI が通ったコミット(head_sha)そのものをデプロイする
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           cd /root/yomi-KAI
-          git pull origin main
-          docker compose up -d --build
-          docker image prune -f
-          docker builder prune -f
+          git fetch --quiet origin main
+          # 実行するのはデプロイ対象コミットのスクリプト
+          git show "$DEPLOY_SHA:scripts/deploy.sh" > /tmp/yomi-kai-deploy.sh
+          bash /tmp/yomi-kai-deploy.sh "$DEPLOY_SHA"

@@ -1,0 +1,27 @@
+[project]
+name = "yomi-kai"
+version = "0.0.0"
+description = "Discord 読み上げ (TTS) Bot"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+# 実行時の依存は requirements.txt（Docker / build.py が参照）で管理する
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["discord.py[voice]>=2.0", "pytest", "ruff"]
+
+[tool.setuptools]
+packages = ["yomi_kai", "yomi_kai.tts", "yomi_kai.cogs"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["lib", "dist", "build_cache", "temp", "log", "dict", "voicevox_core"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
