@@ -12,7 +12,7 @@ from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
 from ..settings import SettingsStore, resolve_voice, server_speaker
-from ..text import announce_text, build_read_text, voice_transition
+from ..text import announce_text, build_read_text, describe_attachments, voice_transition
 from ..tts import TTSEngine
 from ..ui import DropdownView
 
@@ -220,9 +220,13 @@ class VoiceCog(commands.Cog):
             role_name=lambda i: r.name if (r := guild.get_role(i)) else None,
             channel_name=lambda i: c.name if (c := guild.get_channel(i)) else None,
             max_length=self.config.max_read_length,
+            attachments=describe_attachments(
+                [(a.content_type, a.filename) for a in message.attachments],
+                [s.name for s in message.stickers],
+            ),
         )
 
-        # 空メッセージ（添付ファイルのみ等）は読み上げをスキップ
+        # 空メッセージ（埋め込みのみ等）は読み上げをスキップ
         if not read_msg.strip():
             return
 
