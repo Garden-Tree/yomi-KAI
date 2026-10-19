@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from discord.ext import commands
 
 from .config import Config, ConfigError, load_config
 from .dictionary import DictionaryStore
+from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
 from .settings import SettingsStore
 from .tts import TTSEngine
 
@@ -22,7 +25,7 @@ def build_engine(config: Config) -> TTSEngine:
     from .tts import CompositeEngine
     from .tts.voicevox import VoicevoxEngine
 
-    voicevox = VoicevoxEngine(load_all_models=config.voicevox_load_all_models)
+    voicevox = VoicevoxEngine(load_all_models=config.voicevox_load_all_models, workers=config.voicevox_workers)
     if not config.use_google_tts:
         return voicevox
 
@@ -43,8 +46,46 @@ class YomiBot(commands.Bot):
         self.engine = engine
         self.store = store
         self.settings = settings
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        # on_disconnect で True、on_ready / on_resumed で False（is_ready() は切断中も True のままのことがある）
+        self._gateway_down = True
+        self.alerter: DisconnectAlerter | None = None
+        if config.alert_webhook_url:
+            self.alerter = DisconnectAlerter(webhook_sender(config.alert_webhook_url), alert_after=config.alert_after)
+            logger.info("切断通知を有効にしました (%s, %d秒)", mask_url(config.alert_webhook_url), config.alert_after)
+
+    # --- 接続監視（yomi_kai.health） ---
+    def is_gateway_alive(self) -> bool:
+        if self._gateway_down:
+            return False
+        return self.is_ready() and not self.is_closed() and math.isfinite(self.latency)
+
+    def _start_monitoring(self) -> None:
+        self._heartbeat_task = asyncio.create_task(heartbeat_loop(self.is_gateway_alive), name="yomi-kai-heartbeat")
+        if self.alerter is not None:
+            # 起動直後に接続できない状態が続いた場合も通知できるよう、接続完了までは切断中として扱う
+            self.alerter.disconnected()
+
+    async def on_disconnect(self) -> None:
+        self._gateway_down = True
+        if self.alerter is not None:
+            self.alerter.disconnected()
+
+    async def on_resumed(self) -> None:
+        self._gateway_down = False
+        if self.alerter is not None:
+            self.alerter.connected()
+
+    async def close(self) -> None:
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+        if self.alerter is not None:
+            await self.alerter.close()
+        await super().close()
 
     async def setup_hook(self) -> None:
+        self._start_monitoring()
+
         from .cogs.dictionary import DictionaryCog
         from .cogs.misc import MiscCog
         from .cogs.settings import SettingsCog
@@ -59,12 +100,32 @@ class YomiBot(commands.Bot):
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))
         await self.add_cog(MiscCog(self, self.config))
+        await self.sync_app_commands()
+
+    async def sync_app_commands(self) -> None:
+        """スラッシュコマンドを Discord に登録する（全サーバー共通）。失敗しても起動は続ける。
+
+        グローバルコマンドは、登録・変更してから Discord のクライアントに表示されるまで時間がかかることがある。
+        """
+        try:
+            synced = await self.tree.sync()
+        except Exception:
+            logger.exception("スラッシュコマンドの同期に失敗しました（プレフィックスのコマンドは使えます）")
+            return
+        logger.info("スラッシュコマンドを%d件同期しました", len(synced))
 
     async def on_ready(self) -> None:
+        self._gateway_down = False
+        if self.alerter is not None:
+            self.alerter.connected()
         logger.info("Launch complete! Logged in as [%s]. PREFIX is [%s].", self.user.name, self.config.prefix)
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, commands.UserInputError):
+            # 引数の誤りは各 Cog の cog_command_error が案内を返す
+            logger.debug("コマンドの引数が不正です: %s", error)
             return
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.send("このコマンドはサーバー内でのみ使用できます")

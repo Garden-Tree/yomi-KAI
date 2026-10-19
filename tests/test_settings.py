@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from yomi_kai.settings import GuildSettings, SettingsStore, UserSettings, resolve_voice
+from yomi_kai.settings import GuildSettings, SettingsStore, UserSettings, resolve_voice, server_speaker
 
 GUILD = 1234
 ALICE = 111
@@ -110,6 +110,7 @@ def test_atomic_write_leaves_no_temp_files(tmp_path):
         json.dumps({"users": []}),
         json.dumps({"users": {"abc": {}}}),
         json.dumps({"users": {"1": {"speed": "fast"}}}),
+        json.dumps({"announce_voice": "yes"}),
     ],
 )
 def test_corrupt_file_reads_as_empty_but_writes_fail(tmp_path, content):
@@ -165,3 +166,24 @@ def test_resolve_clamps_out_of_range_speed():
     settings = GuildSettings(users={ALICE: UserSettings(speed=5.0), BOB: UserSettings(speed=0.1)})
     assert resolve_voice(settings, ALICE, AVAILABLE, ZUNDA) == (ZUNDA, 2.0)
     assert resolve_voice(settings, BOB, AVAILABLE, ZUNDA) == (ZUNDA, 0.5)
+
+
+# --- 入退室の読み上げ設定 ---
+
+
+def test_announce_voice_defaults_to_on_and_persists(tmp_path):
+    store = SettingsStore(tmp_path)
+    assert store.get(GUILD).announce_voice is True
+    store.set_user_speed(GUILD, ALICE, 1.2)
+    store.set_announce_voice(GUILD, False)
+    assert store.get(GUILD).announce_voice is False
+    assert read_json(tmp_path / f"{GUILD}.json") == {"users": {str(ALICE): {"speed": 1.2}}, "announce_voice": False}
+    assert SettingsStore(tmp_path).get(GUILD).announce_voice is False
+    store.set_announce_voice(GUILD, True)
+    assert SettingsStore(tmp_path).get(GUILD).announce_voice is True
+
+
+def test_server_speaker():
+    assert server_speaker(GuildSettings(TSUMUGI), AVAILABLE, ZUNDA) == TSUMUGI
+    assert server_speaker(GuildSettings(), AVAILABLE, ZUNDA) == ZUNDA
+    assert server_speaker(GuildSettings("消えた話者"), AVAILABLE, ZUNDA) == ZUNDA

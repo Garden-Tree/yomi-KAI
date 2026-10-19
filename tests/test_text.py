@@ -1,8 +1,15 @@
+import pytest
+
 from yomi_kai.text import (
+    JOIN,
+    LEAVE,
+    announce_text,
     build_read_text,
+    chunk_lines,
     compile_dictionary,
     gen_sd_text,
     strip_markdown,
+    voice_transition,
 )
 
 # --- 辞書置換 ---
@@ -129,3 +136,51 @@ def test_emoji_name_with_underscores_untouched():
 def test_gen_sd_text():
     assert gen_sd_text("word") == "＿人人人人＿\n＞　word　＜\n￣Y^Y^Y^Y￣"
     assert gen_sd_text("突然の死") == "＿人人人人人人＿\n＞　突然の死　＜\n￣Y^Y^Y^Y^Y^Y￣"
+
+
+# --- 入退室 ---
+
+BOT_VC = 10
+OTHER_VC = 20
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        (None, BOT_VC, JOIN),  # 接続
+        (BOT_VC, None, LEAVE),  # 切断
+        (OTHER_VC, BOT_VC, JOIN),  # 別のチャンネルから移動してきた
+        (BOT_VC, OTHER_VC, LEAVE),  # 別のチャンネルへ移動した
+        (None, OTHER_VC, None),  # 関係ないチャンネル
+        (OTHER_VC, None, None),
+        (OTHER_VC, 30, None),
+        (BOT_VC, BOT_VC, None),  # ミュート・配信などの変更
+        (None, None, None),
+    ],
+)
+def test_voice_transition(before, after, expected):
+    assert voice_transition(before, after, BOT_VC, is_bot=False) == expected
+
+
+def test_voice_transition_ignores_bots_and_unconnected():
+    assert voice_transition(None, BOT_VC, BOT_VC, is_bot=True) is None
+    assert voice_transition(None, BOT_VC, None, is_bot=False) is None
+
+
+def test_announce_text():
+    assert announce_text(JOIN, "たろう") == "たろうさんが入室しました"
+    assert announce_text(LEAVE, "たろう") == "たろうさんが退室しました"
+
+
+# --- 長いメッセージの分割 ---
+
+
+def test_chunk_lines():
+    assert chunk_lines(["a", "b", "c"], limit=3) == ["a\nb", "c"]
+    assert chunk_lines(["abc", "d"], limit=3) == ["abc", "d"]
+    assert chunk_lines(["abcdefg", "h"], limit=3) == ["abc", "def", "g\nh"]
+    assert chunk_lines([]) == []
+    lines = [f"話者{i}" for i in range(1000)]
+    chunks = chunk_lines(lines)
+    assert all(len(c) <= 1900 for c in chunks)
+    assert "\n".join(chunks).split("\n") == lines

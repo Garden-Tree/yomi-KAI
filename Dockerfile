@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+# Bot を実行する一般ユーザー（root では動かさない）。起動時の権限の切り替えは docker-entrypoint.sh が行う
+RUN groupadd --gid 1000 yomi && useradd --uid 1000 --gid yomi --no-create-home --shell /usr/sbin/nologin yomi
+
 WORKDIR /app
 
 # install python dependencies
@@ -30,10 +33,18 @@ RUN ARCH=$(dpkg --print-architecture) && \
     yes "y" | /tmp/download-linux -o /app/voicevox_core --only models --models-pattern 0.vvm && \
     rm /tmp/download-linux
 
-# copy application code
-COPY . .
+# copy application code（コードだけの変更ならここから下だけが再ビルドされる）
+COPY --chown=yomi:yomi . .
+RUN chmod 755 /app/docker-entrypoint.sh && chown yomi:yomi /app
 
 # timezone mapping default
 ENV TZ=Asia/Tokyo
+# HEALTHCHECK（root で実行される）が yomi 所有のディレクトリに root 所有の .pyc を作らないようにする
+ENV PYTHONDONTWRITEBYTECODE=1
 
+# Discord に接続している間、Bot が log/heartbeat を30秒ごとに更新する。180秒以上更新がなければ unhealthy
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 CMD python -m yomi_kai.health || exit 1
+
+# root で起動し、ボリュームの所有者を直してから yomi ユーザーで実行する（docker-entrypoint.sh）
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["python", "yomi-KAI.py"]
