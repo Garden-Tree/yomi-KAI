@@ -35,7 +35,8 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 
 ### 事前準備 (全環境共通)
 
-1. [Discord Developer Portal](https://discord.com/developers/applications) からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与します。
+1. [Discord Developer Portal](https://discord.com/developers/applications) からbotを作成し、 `Privileged Gateway Intents` の権限をすべて付与します（メッセージを読み上げるため `MESSAGE CONTENT INTENT` は必須です）。
+1. 「OAuth2」→「URL Generator」で、SCOPES に **`bot` と `applications.commands`** の両方にチェックを入れて招待URLを作成し、botをサーバーに招待します（`applications.commands` が無いとスラッシュコマンドが表示されません。導入済みの場合も、この招待URLで招待し直せば追加されます）。
 1. **(省略可: Googleの音声を使う場合のみ)** [Google Cloud Platform](https://console.cloud.google.com/)(GCP)でプロジェクトを作成し、[Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech?hl=ja)を有効化してAPIキーを取得します。
 1. 後述する各環境の手順でリポジトリ等を用意したのち、同梱されている `config.ini.example` をコピーして `config.ini` を作成し、Discordのトークンを入力して保存します（※GCPの音声を使用する場合は合わせて `USE_GOOGLE_TTS = True` に変更し、取得したAPIキーも入力します）。
 
@@ -87,6 +88,13 @@ docker compose up -d
 ## コマンド
 
 ※以下のコマンド例は、デフォルトのプレフィックスが `y.` に設定されている場合を想定しています（プレフィックスは `config.ini` から自由に変更可能です）。
+
+### スラッシュコマンド
+
+すべてのコマンドは、同じ名前のスラッシュコマンドとしても使えます（例: `y.c` → `/c`、`y.s all` → `/s mode:all`、`y.dict add 単語 読み` → `/dict add`）。入力欄に `/` を打つと説明付きの一覧が表示されます。スラッシュコマンドで個人設定（`/voice`、`/speed`）を操作したときの返信は、本人にだけ表示されます。
+
+- スラッシュコマンドは起動時に Discord へ登録されます。初回や変更直後は、Discord のアプリに表示されるまで時間がかかることがあります（表示されない場合は Discord アプリを再起動してください）。
+- botの招待時に `applications.commands` のスコープが必要です（「事前準備」参照）。
 
 ### y.c
 

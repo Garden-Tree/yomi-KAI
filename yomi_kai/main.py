@@ -100,6 +100,19 @@ class YomiBot(commands.Bot):
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))
         await self.add_cog(MiscCog(self, self.config))
+        await self.sync_app_commands()
+
+    async def sync_app_commands(self) -> None:
+        """スラッシュコマンドを Discord に登録する（全サーバー共通）。失敗しても起動は続ける。
+
+        グローバルコマンドは、登録・変更してから Discord のクライアントに表示されるまで時間がかかることがある。
+        """
+        try:
+            synced = await self.tree.sync()
+        except Exception:
+            logger.exception("スラッシュコマンドの同期に失敗しました（プレフィックスのコマンドは使えます）")
+            return
+        logger.info("スラッシュコマンドを%d件同期しました", len(synced))
 
     async def on_ready(self) -> None:
         self._gateway_down = False
@@ -109,6 +122,10 @@ class YomiBot(commands.Bot):
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         if isinstance(error, commands.CommandNotFound):
+            return
+        if isinstance(error, commands.UserInputError):
+            # 引数の誤りは各 Cog の cog_command_error が案内を返す
+            logger.debug("コマンドの引数が不正です: %s", error)
             return
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.send("このコマンドはサーバー内でのみ使用できます")
