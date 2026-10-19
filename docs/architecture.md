@@ -31,7 +31,8 @@ yomi_kai/
   ui.py                # 話者選択ドロップダウン（discord.ui.Select / View）
   tts/
     __init__.py        # TTSEngine プロトコル・Speaker・CompositeEngine・find_speakers（重いライブラリは import しない）
-    voicevox.py        # VoicevoxEngine
+    voicevox.py        # VoicevoxEngine（asyncio API の Synthesizer を VOICEVOX_WORKERS 個のプールで並行に使う）
+    pool.py            # InstancePool（借りて返すプール）・LoopThread（専用スレッドのイベントループ）
     google.py          # GoogleEngine
   cogs/
     common.py          # reply（スラッシュでは ephemeral にできる返信）・original_error などの共通ヘルパー
@@ -46,10 +47,17 @@ tests/                 # pytest（text / dictionary / settings / session / tts /
 ### 2.1 TTSエンジン
 `TTSEngine` は `synthesize(text, speaker, speed=1.0) -> bytes`（WAV）、`speakers() -> list[Speaker]`、`default_speaker` を持つプロトコルです。`speed` は話速の倍率です。
 
-* **VoicevoxEngine**: ONNX Runtime と Open JTalk 辞書を起動時に一度だけ読み込み、既定では `models/vvms/0.vvm` のみをロードします（`config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を書くと `*.vvm` をすべてロード）。話者一覧はモデルのメタ情報（`VoiceModelFile.metas`）から構築し、ノーマルスタイルはキャラクター名（例: `ずんだもん`、`春日部つむぎ`）、その他のスタイルは `名前（スタイル名）` のラベルになります。ずんだもん・春日部つむぎは常に先頭に並び、Discord の制限によりドロップダウンには最大25件まで表示されます。速度が 1.0 なら `Synthesizer.tts()`、それ以外は `create_audio_query()` → `speed_scale` を設定 → `synthesis()` で合成します。
+* **VoicevoxEngine**: ONNX Runtime と Open JTalk 辞書を起動時に一度だけ読み込み、既定では `models/vvms/0.vvm` のみをロードします（`config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を書くと `*.vvm` をすべてロード）。話者一覧はモデルのメタ情報（`VoiceModelFile.metas`）から構築し、ノーマルスタイルはキャラクター名（例: `ずんだもん`、`春日部つむぎ`）、その他のスタイルは `名前（スタイル名）` のラベルになります。ずんだもん・春日部つむぎは常に先頭に並び、Discord の制限によりドロップダウンには最大25件まで表示されます。速度が 1.0 なら `Synthesizer.tts()`、それ以外は `create_audio_query()` → `speed_scale` を設定 → `synthesis()` で合成します（いずれも `voicevox_core.asyncio` の API。次項）。
 * **GoogleEngine**: `USE_GOOGLE_TTS = True` の場合のみ構築され、`CompositeEngine` で VOICEVOX と束ねられます（初期話者は `ja-JP-Wavenet-A`）。速度は `AudioConfig.speaking_rate` で指定します。
 * **CompositeEngine**: 話者名で担当エンジンへ振り分け、`speed` はそのまま渡します。
-* **VOICEVOX の並行呼び出し**: サーバーごとのワーカーが `asyncio.to_thread` で並行に合成するため、同じ `Synthesizer` が複数スレッドから同時に呼ばれ得ます。voicevox_core 0.16 の Python API ドキュメント（`voicevox_core.blocking`）・型スタブ（`_rust/blocking.pyi`）・C API ドキュメントのいずれにも、`Synthesizer.tts` / `create_audio_query` / `synthesis` を複数スレッドから同時に呼んでよいかの記載がないため、`VoicevoxEngine` 内の `threading.Lock` で合成呼び出しを直列化しています（1件の合成は ONNX Runtime が内部で複数コアを使うので、直列化による損失は小さい）。`GoogleEngine` はネットワーククライアントなので並行のままです。
+* **VOICEVOX の並行合成（Synthesizer のプール）**: voicevox_core 0.16.4 のソースを確認した結果、次のことが分かっています。
+  * ONNX のセッションは `async_lock::Mutex<ort::session::Session>` で守られている（[crates/voicevox_core/src/core/infer/runtimes/onnxruntime.rs](https://github.com/VOICEVOX/voicevox_core/blob/0.16.4/crates/voicevox_core/src/core/infer/runtimes/onnxruntime.rs)）。1つの `Synthesizer` を複数スレッドから呼んでも安全だが、推論は直列になる。
+  * Python の blocking API（`voicevox_core.blocking`）は **GIL を握ったまま**合成する（[crates/voicevox_core_python_api/src/lib.rs](https://github.com/VOICEVOX/voicevox_core/blob/0.16.4/crates/voicevox_core_python_api/src/lib.rs) の blocking `tts` は GIL を解放せずに `perform()` する）。スレッドを増やしても速くならないうえ、合成中は Bot のイベントループ（Discord との通信・音声の送信）も止まる。実測でも、合成中に別スレッドが回せた Python の処理は通常の 0.5% 程度だった。
+  * asyncio API（`voicevox_core.asyncio`）は GIL を解放して合成する。
+
+  そこで `VoicevoxEngine` は、モデルを読み込んだ asyncio API の `Synthesizer` を `VOICEVOX_WORKERS` 個（1〜8、既定 2）用意し、専用スレッドのイベントループ（`tts/pool.py` の `LoopThread`）で動かします。同期の `synthesize()` はそのループへ合成を依頼して結果を待つだけなので、呼び出し側（`GuildSession` の `asyncio.to_thread`）や `TTSEngine` の形は変わりません。`Synthesizer` は `InstancePool` から1つ借りて使い終わったら返すため、1つの `Synthesizer` を同時に2つの合成が使うことはなく（ドキュメント化されていないスレッド安全性に頼らない）、全サーバー合計の同時合成数はワーカー数で頭打ちになります。ONNX Runtime は1つ、Open JTalk（内部で `Mutex` を持つ `Arc`）は全 `Synthesizer` で共有し、`cpu_num_threads` は「CPU 数 ÷ ワーカー数」（最低1）にして CPU の取り合いを避けます。起動時にワーカー数・スレッド数と（psutil か /proc で取れれば）メモリ使用量をログに出します。
+  * 参考（Windows・24 論理 CPU・`0.vvm` のみ、4文の合成）: ワーカー1 は読み込み後 RSS 約130MB・4文を並行 2.0秒、ワーカー2 は約200MB・1.0秒、ワーカー4 は約350MB・0.9秒。合成を繰り返した後の RSS は ONNX Runtime のメモリ確保によりそれぞれ約280MB / 530MB / 890MB まで増えます。
+  * `GoogleEngine` はネットワーククライアントなのでプールは持たず、並行数は `GuildSession` の先読み数だけで制限されます。
 * **話者名での指定**: `find_speakers(query, names)` が完全一致 → 前方一致 → 部分一致の順に探し（NFKC 正規化・大文字小文字を無視）、最初に見つかった段階の候補を返します。`y.voice 名前` は候補が1つなら設定、複数なら最大10件を表示します。`y.voice list` は全話者を2000文字未満に分けて表示します。
 * `voicevox_core` / `google-cloud-texttospeech` は `main.build_engine()` の中で遅延 import されるため、テストや CI はこれらをインストールせずに実行できます。
 
@@ -57,12 +65,17 @@ tests/                 # pytest（text / dictionary / settings / session / tts /
 サーバーごとの状態はすべて `GuildSession` が持ち、`VoiceCog.sessions: dict[int, GuildSession]`（キーは `guild.id`）で管理します。モジュールレベルの可変状態はありません。
 
 * **接続 (`c`)**: ボイスクライアントと読み上げ対象のテキストチャンネルを `session.start()` に渡し、ワーカータスクを起動、AFKタイマーを開始します（発言がなくても `AFK_TIME` 秒後に自動切断）。
-* **読み上げ**: `on_message` は発言者の話者・速度を `resolve_voice()` で決め（2.3節）、整形済みテキストと一緒に `session.enqueue(text, speaker, speed)` で `asyncio.Queue` に積むだけです（AFKタイマーも張り直す）。セッション自体は話者を持ちません。
-* **ワーカー**: 1サーバーにつき1本。キューから1件取り出し `asyncio.to_thread` で合成 → 再生、を繰り返します。再生中に次の1件だけ先行して合成しますが、再生順は必ずキュー投入順です。FFmpeg のソースは `voice_client.play()` の直前に生成し、再生完了の `after` コールバックは `loop.call_soon_threadsafe` でイベントループ側の `asyncio.Event` をセットしてワーカーに制御を戻します。
-* **スキップ (`s` / `s all`)**: `s` は再生中なら `voice_client.stop()`、合成中ならその1件を再生しないよう印を付けます。`s all` はキューを空にしたうえで「世代番号」を1つ進めます。キューの各項目は積まれた時点の世代番号を持ち、ワーカーは世代が古い項目（合成中・先読み済みのもの）を再生せずに捨てます。
+* **読み上げ**: `on_message` は発言者の話者・速度を `resolve_voice()` で決め（2.3節）、整形済みテキストと一緒に `session.enqueue(text, speaker, speed)` で積むだけです（AFKタイマーも張り直す）。`enqueue` は `text.split_for_synthesis()` でメッセージを合成用のかたまりに分けます（2.2.1）。セッション自体は話者を持ちません。
+* **ワーカー**: 1サーバーにつき1本。再生前のかたまりが最大 `PREFETCH_CHUNKS`（3）個になるよう、メッセージをまたいで次のかたまりの合成を `asyncio.to_thread` で並行に始め、かたまりを必ずキュー投入順に1つずつ再生します（合成が遅いかたまりがあっても追い越さない）。長文でも最初の文の合成が終われば再生が始まり、その再生中に続きを合成します。かたまりの間にはわずかな間が空きます（音声の連結はしない）。1つのかたまりの合成に失敗した場合はそのかたまりだけ飛ばし、「読み上げに失敗しました」はメッセージごとに1回だけ通知します。FFmpeg のソースは `voice_client.play()` の直前に生成し、再生完了の `after` コールバックは `loop.call_soon_threadsafe` でイベントループ側の `asyncio.Event` をセットしてワーカーに制御を戻します。
+* **スキップ (`s` / `s all`)**: スキップはメッセージ単位です。`s` は再生中（または合成待ち）のメッセージに印を付けて、その残りのかたまり（先読み合成済みのものを含む）の合成タスクを取り消し、再生中なら `voice_client.stop()` します。`s all` はキューを空にしたうえで「世代番号」を1つ進め、先読み中のタスクを取り消します。各メッセージは積まれた時点の世代番号を持ち、ワーカーは世代が古いかたまりを再生せずに捨てます。切断（`close()`）でも合成中のタスクをすべて取り消します。
 * **入退室の読み上げ**: `on_voice_state_update` で、Bot 以外のメンバーが Bot のいるボイスチャンネルに入る・出る（チャンネル間の移動を含む）と、`text.voice_transition()` が入室・退室を判定し、「〇〇さんが入室しました」「〇〇さんが退室しました」をサーバーの話者・速度 1.0 で `session.enqueue` します（個人の話者と区別するため）。ミュート・配信などの変更や Bot 自身の接続では読み上げません。退室で Bot だけが残る場合は読み上げずに自動切断します。サーバー設定 `announce_voice`（`y.announce on|off`、既定オン）で無効にできます。
-* **AFKタイマー**: 読み上げ中（再生中・合成中・キューが空でない）は切断せず、読み上げが終わってからさらに `AFK_TIME` 秒待ちます。
+* **AFKタイマー**: 読み上げ中（再生中・合成中・未合成のかたまりが残っている）は切断せず、読み上げが終わってからさらに `AFK_TIME` 秒待ちます。
 * **切断**: `dc` コマンド・Botのキック・AFKタイムアウト・VCが無人になった場合のいずれも `session.close()` を通り、ワーカー停止 → キュー破棄 → 再生停止 → 切断を行います。話者・速度の設定は `SettingsStore` に保存されているため、再接続・再起動後も引き継がれます。
+
+#### 2.2.1 合成用の分割（`text.split_for_synthesis`）
+* 「。！？!?」の直後と改行では必ず区切ります。直後に続く「！？」「…」などの記号の連続や、閉じ括弧（」』）など）は前のかたまりに含めます（「えっ！？」が「えっ！」「？」に割れない）。空白だけのかたまりは捨て、記号だけのかたまりは前に連結します。
+* 読点「、，」では、かたまりが 40 文字（`soft_limit`）を超える場合だけ、上限より前の最後の読点で区切ります（上限より前になければ、後の最初の読点）。読点ごとに区切ると、合成のたびに文のイントネーション（抑揚）がリセットされて不自然な読み方になるためです。
+* 句読点も改行もない長い文は途中で切りません（単語の途中で切ると読みが壊れるため）。
 
 ### 2.3 サーバーごとの設定（`SettingsStore`）
 `settings/{guild_id}.json` に次の形式で保存します（`DictionaryStore` と同じく、メモリキャッシュ・`threading.Lock`・一時ファイル + fsync + `os.replace` によるアトミック書き込み。書き込み処理は `jsonfile.py` で共有）。
@@ -95,7 +108,7 @@ tests/                 # pytest（text / dictionary / settings / session / tts /
 1. **テキスト受信**: `VoiceCog.on_message` でテキストをフック（コマンド用のプレフィックスから始まるもの、Bot・DM・読み上げ対象外チャンネルの発言は除外）。
 2. **辞書置換**: `dict/{guild.id}.json` の内容を `DictionaryStore` が初回のみスレッドで読み込み、コンパイル済み正規表現と一緒にメモリへキャッシュ（`dict add` / `dict del` 時は書き込んだ内容で差し替えるため、読み上げ時にファイル I/O は発生しない）。長い単語を優先して読み仮名に置換。
 3. **前処理**: コードブロック（「コード省略」に置換、インラインコードは中身だけ残す）、URL、ネタバレタグ(`\|\|...\|\|`)、メンション(`<@...>` / `<@&...>` / `<#...>`)、カスタム絵文字、簡易なマークダウンを置換（`text.build_read_text`）。`*強調*` は記号の内側が空白でない場合のみ、`_強調_` は英数字に挟まれていない場合のみ除去するため、`snake_case_name` や `2 * 3 * 4` はそのまま読まれます。続いて添付ファイル・スタンプの説明（`text.describe_attachments`: 「画像」「画像2枚」「動画」「音声」「ファイル」「スタンプ 名前」。種類は content_type、無ければ拡張子で判断）を末尾に付け（本文が空でも読み上げる）、最後にそれも含めて `MAX_READ_LENGTH` 文字を超えた分を切り詰めて「以下略」を付けます。
-4. **音声合成・再生**: 上記のワーカーが、発言者ごとに決めた話者・速度（2.3節）に応じたエンジンでメモリ上に WAV を生成し、FFmpeg 経由で順番にVCへ送信。
+4. **音声合成・再生**: 上記のワーカーが、メッセージを文ごとのかたまりに分けて先読みしながら、発言者ごとに決めた話者・速度（2.3節）に応じたエンジンでメモリ上に WAV を生成し、FFmpeg 経由で順番にVCへ送信。
 5. **AFK監視**: 接続時および読み上げのたびにタイマーを張り直し、`AFK_TIME` 秒間読み上げがない場合や、VCにBot以外誰もいなくなった場合は自動でボイスチャンネルから切断。
 
 ログはコンソールに INFO 以上、`log/` 配下のファイルに DEBUG 以上を出力します（読み上げた本文はファイルにのみ DEBUG で記録）。

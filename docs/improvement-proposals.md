@@ -11,7 +11,7 @@
 
 > **B-2（スラッシュコマンド）・B-5（入退室の読み上げ）・B-9（添付ファイル・スタンプの読み上げ）は 2026-10-19 に実装済みのため削除しました。**
 > B-2 は処理を別関数に切り出す方式ではなく、discord.py の hybrid コマンドで実装（`y.c` と `/c` が同じ実装）。B-5 は `y.announce on|off`（`announce_voice`）で切り替え可能。
-> あわせて、接続監視（ハートビート・Docker の HEALTHCHECK・切断通知の Webhook）、`y.voice 名前` / `y.voice list`、VOICEVOX 合成の直列化、Docker の一般ユーザー実行も追加しました。詳細は `docs/architecture.md` を参照してください。
+> あわせて、接続監視（ハートビート・Docker の HEALTHCHECK・切断通知の Webhook）、`y.voice 名前` / `y.voice list`、VOICEVOX 合成の並行化（Synthesizer のプール）・長文の分割合成、Docker の一般ユーザー実行も追加しました。詳細は `docs/architecture.md` を参照してください。
 
 ---
 
