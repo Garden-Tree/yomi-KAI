@@ -48,3 +48,14 @@ def test_invalid_alert_settings(tmp_path, extra, key):
     with pytest.raises(ConfigError, match=key) as excinfo:
         load(tmp_path, extra)
     assert "example.com" not in str(excinfo.value)  # URL は表示しない
+
+
+def test_voicevox_workers(tmp_path):
+    assert load(tmp_path).voicevox_workers == 2
+    assert load(tmp_path, "VOICEVOX_WORKERS = 4\n").voicevox_workers == 4
+
+
+@pytest.mark.parametrize("value", ["0", "9", "two"])
+def test_invalid_voicevox_workers(tmp_path, value):
+    with pytest.raises(ConfigError, match="VOICEVOX_WORKERS"):
+        load(tmp_path, f"VOICEVOX_WORKERS = {value}\n")

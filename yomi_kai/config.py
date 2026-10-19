@@ -3,7 +3,8 @@
 キーは従来どおり ``[DEFAULT]`` セクションの
 DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
-ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）を追加している。
+ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
+VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 2）を追加している。
 """
 
 from __future__ import annotations
@@ -31,13 +32,14 @@ class Config:
     max_read_length: int = 100
     alert_webhook_url: str | None = None
     alert_after: int = 300
+    voicevox_workers: int = 2
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
         return (
             f"Config(prefix={self.prefix!r}, afk_time={self.afk_time}, use_google_tts={self.use_google_tts}, "
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
-            f"alert_after={self.alert_after})"
+            f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers})"
         )
 
 
@@ -111,6 +113,17 @@ def load_config(path: str | Path = "config.ini") -> Config:
             raise ConfigError(
                 f"config.ini の `ALERT_AFTER` は秒数（整数）で指定してください（現在値: {alert_raw!r}）。"
             ) from None
+        workers_raw = (section.get("VOICEVOX_WORKERS") or "").strip() or "2"
+        try:
+            voicevox_workers = int(workers_raw)
+        except ValueError:
+            raise ConfigError(
+                f"config.ini の `VOICEVOX_WORKERS` は整数で指定してください（1〜8、現在値: {workers_raw!r}）。"
+            ) from None
+        if not 1 <= voicevox_workers <= 8:
+            raise ConfigError(
+                f"config.ini の `VOICEVOX_WORKERS` は 1〜8 で指定してください（現在値: {workers_raw!r}）。"
+            )
         if alert_after < 30:
             raise ConfigError(f"config.ini の `ALERT_AFTER` は 30 以上で指定してください（現在値: {alert_raw!r}）。")
     except configparser.Error as e:
@@ -128,4 +141,5 @@ def load_config(path: str | Path = "config.ini") -> Config:
         max_read_length=max_read_length,
         alert_webhook_url=alert_webhook_url,
         alert_after=alert_after,
+        voicevox_workers=voicevox_workers,
     )

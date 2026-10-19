@@ -25,7 +25,7 @@ def build_engine(config: Config) -> TTSEngine:
     from .tts import CompositeEngine
     from .tts.voicevox import VoicevoxEngine
 
-    voicevox = VoicevoxEngine(load_all_models=config.voicevox_load_all_models)
+    voicevox = VoicevoxEngine(load_all_models=config.voicevox_load_all_models, workers=config.voicevox_workers)
     if not config.use_google_tts:
         return voicevox
 

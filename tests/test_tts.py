@@ -1,13 +1,14 @@
+import asyncio
 import importlib
 import sys
 import threading
-import time
 import types
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from yomi_kai.tts import CompositeEngine, Speaker, find_speakers
+from yomi_kai.tts.pool import InstancePool, LoopThread
 
 
 class RecordingEngine:
@@ -54,71 +55,144 @@ def test_composite_rejects_unknown_default():
         CompositeEngine([RecordingEngine(["ずんだもん"])], default_speaker="nobody")
 
 
-# --- VoicevoxEngine の直列化 ---
+# --- VoicevoxEngine の Synthesizer プール ---
 
 
-def _import_voicevox_engine():
+def _import_voicevox_module():
     """voicevox_core が無い環境（CI）でもテストできるよう、無ければ空のスタブを差し込んで import する。"""
     try:
-        importlib.import_module("voicevox_core.blocking")
+        importlib.import_module("voicevox_core.asyncio")
     except ImportError:
         package = types.ModuleType("voicevox_core")
-        blocking = types.ModuleType("voicevox_core.blocking")
+        stub = types.ModuleType("voicevox_core.asyncio")
         for name in ("Onnxruntime", "OpenJtalk", "Synthesizer", "VoiceModelFile"):
-            setattr(blocking, name, type(name, (), {}))
-        package.blocking = blocking
-        sys.modules.setdefault("voicevox_core", package)
-        sys.modules.setdefault("voicevox_core.blocking", blocking)
-    return importlib.import_module("yomi_kai.tts.voicevox").VoicevoxEngine
+            setattr(stub, name, type(name, (), {}))
+        package.asyncio = stub
+        sys.modules["voicevox_core"] = package
+        sys.modules["voicevox_core.asyncio"] = stub
+    return importlib.import_module("yomi_kai.tts.voicevox")
 
 
-class OverlapDetectingSynthesizer:
-    """同時に呼ばれたら記録する偽の Synthesizer。"""
+class Overlap:
+    """同時に実行されている数を数える。"""
 
     def __init__(self):
         self.active = 0
         self.max_active = 0
-        self.calls = 0
         self._guard = threading.Lock()
 
-    def _enter(self):
+    def __enter__(self):
         with self._guard:
             self.active += 1
-            self.calls += 1
             self.max_active = max(self.max_active, self.active)
-        time.sleep(0.02)
+
+    def __exit__(self, *exc):
         with self._guard:
             self.active -= 1
 
-    def tts(self, text, style_id):
-        self._enter()
+
+class FakeSynthesizer:
+    """asyncio API の偽物。自分自身の同時実行数と、全インスタンス合計の同時実行数を記録する。"""
+
+    def __init__(self, overall):
+        self.own = Overlap()
+        self.overall = overall
+        self.calls = 0
+
+    async def _work(self):
+        with self.own, self.overall:
+            self.calls += 1
+            await asyncio.sleep(0.05)
+
+    async def tts(self, text, style_id):
+        await self._work()
         return b"wav"
 
-    def create_audio_query(self, text, style_id):
-        self._enter()
+    async def create_audio_query(self, text, style_id):
+        await self._work()
         return types.SimpleNamespace(speed_scale=1.0)
 
-    def synthesis(self, query, style_id):
-        self._enter()
+    async def synthesis(self, query, style_id):
+        assert query.speed_scale != 1.0
+        await self._work()
         return b"wav"
 
 
-def test_voicevox_engine_serializes_synthesis():
-    VoicevoxEngine = _import_voicevox_engine()
-    engine = object.__new__(VoicevoxEngine)  # モデルを読み込まずに合成部分だけ試す
-    fake = OverlapDetectingSynthesizer()
-    engine._synthesizer = fake
-    engine._lock = threading.Lock()
+def make_engine(workers):
+    voicevox = _import_voicevox_module()
+    engine = object.__new__(voicevox.VoicevoxEngine)  # モデルを読み込まずに合成部分だけ試す
+    overall = Overlap()
+    fakes = [FakeSynthesizer(overall) for _ in range(workers)]
+    engine._loop = LoopThread("test-voicevox")
+
+    async def make_pool():
+        return InstancePool(fakes)
+
+    engine._pool = engine._loop.run(make_pool())
     engine._style_ids = {"ずんだもん": 3}
     engine._default = "ずんだもん"
+    return engine, fakes, overall
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+
+@pytest.mark.parametrize("workers", [1, 2, 3])
+def test_voicevox_pool_never_shares_an_instance_and_overlaps_up_to_workers(workers):
+    engine, fakes, overall = make_engine(workers)
+    try:
         speeds = [1.0, 1.5] * 6
-        results = list(pool.map(lambda s: engine.synthesize("テスト", "ずんだもん", s), speeds))
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda s: engine.synthesize("テスト", "ずんだもん", s), speeds))
+    finally:
+        engine._loop.stop()
 
     assert results == [b"wav"] * len(speeds)
-    assert fake.calls == 6 + 6 * 2  # 速度 1.0 は tts、それ以外は create_audio_query + synthesis
-    assert fake.max_active == 1
+    assert sum(f.calls for f in fakes) == 6 + 6 * 2  # 速度 1.0 は tts、それ以外は create_audio_query + synthesis
+    assert all(f.own.max_active == 1 for f in fakes)  # 1つの Synthesizer を同時に2つの合成が使わない
+    assert overall.max_active == workers  # ワーカー数までは並行に合成できる
+    assert engine.workers == workers
+
+
+def test_instance_pool_waits_until_returned():
+    async def run():
+        pool = InstancePool(["a"])
+        order = []
+
+        async def use(tag):
+            async with pool.borrow() as item:
+                order.append(("start", item))
+                await asyncio.sleep(0.01)
+                order.append(("end", item))
+
+        await asyncio.gather(*(use(i) for i in range(3)))
+        return order
+
+    # 開始と終了が必ず交互（重ならない）
+    assert [kind for kind, _ in asyncio.run(run())] == ["start", "end"] * 3
+    with pytest.raises(ValueError):
+        asyncio.run(_make_empty_pool())
+
+
+async def _make_empty_pool():
+    return InstancePool([])
+
+
+def test_loop_thread_runs_coroutines_from_other_threads():
+    loop_thread = LoopThread("test")
+    try:
+
+        async def where():
+            return threading.current_thread().name
+
+        assert loop_thread.run(where()) == "test"
+    finally:
+        loop_thread.stop()
+
+
+def test_worker_threads_split_cpus():
+    voicevox = _import_voicevox_module()
+    assert voicevox.worker_threads(2, cpu_count=8) == 4
+    assert voicevox.worker_threads(4, cpu_count=6) == 1
+    assert voicevox.worker_threads(8, cpu_count=2) == 1
+    assert voicevox.worker_threads(1, cpu_count=12) == 12
 
 
 # --- 話者名の検索 ---
