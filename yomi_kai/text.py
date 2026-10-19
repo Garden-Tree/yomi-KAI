@@ -190,7 +190,8 @@ SENTENCE_ENDS = frozenset("。！？!?")
 # 読点。長すぎる場合だけここで区切る
 COMMAS = frozenset("、，")
 # 区切りの直後にあっても前のかたまりに含める記号（「！？」「…」の連続や閉じ括弧を分断しない）
-_TRAILING = SENTENCE_ENDS | COMMAS | frozenset("…‥・ー〜～」』）)】〕］]〉》”’\"'")
+_CLOSING_BRACKETS = frozenset("」』）)】〕］]〉》”’")
+_TRAILING = SENTENCE_ENDS | COMMAS | _CLOSING_BRACKETS | frozenset("…‥・ー〜～\"'")
 DEFAULT_SOFT_LIMIT = 40
 
 
@@ -210,7 +211,12 @@ def _split_sentences(line: str) -> list[str]:
     start = i = 0
     while i < len(line):
         if line[i] in SENTENCE_ENDS:
-            i = _consume_trailing(line, i + 1)
+            end = _consume_trailing(line, i + 1)
+            # 「すごい！」と言った。のように、閉じ括弧の直後に同じ行の続きがあれば文の途中なので区切らない
+            if any(ch in _CLOSING_BRACKETS for ch in line[i + 1 : end]) and end < len(line) and not line[end].isspace():
+                i = end
+                continue
+            i = end
             pieces.append(line[start:i])
             start = i
         else:
@@ -244,7 +250,8 @@ def _split_long(sentence: str, soft_limit: int) -> list[str]:
 def split_for_synthesis(text: str, soft_limit: int = DEFAULT_SOFT_LIMIT) -> list[str]:
     """読み上げテキストを、合成・再生を早く始めるためのかたまりに分ける。
 
-    * 「。！？!?」の後（続く「！？」「…」や閉じ括弧も前に含める）と改行では必ず区切る。
+    * 「。！？!?」の後（続く「！？」「…」や閉じ括弧も前に含める）と改行で区切る。ただし閉じ括弧の直後に
+      同じ行の続きがある場合（「すごい！」と言った。）は文の途中なので区切らない。
     * 読点「、，」では、かたまりが ``soft_limit`` 文字を超えるときだけ区切る（上限より前の最後の読点、
       なければ上限より後の最初の読点）。読点ごとに区切るとそのたびにイントネーションがリセットされ、
       不自然な読み方になるため。
