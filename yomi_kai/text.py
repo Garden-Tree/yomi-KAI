@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from unicodedata import east_asian_width
@@ -181,6 +182,88 @@ def describe_attachments(
             parts.append(f"{label}{count}{counter}")
     parts += [f"スタンプ {name}" for name in sticker_names]
     return " ".join(parts)
+
+
+# --- 合成用の分割 ---
+# 文の終わり。この直後（続く記号・閉じ括弧を含めて）で必ず区切る
+SENTENCE_ENDS = frozenset("。！？!?")
+# 読点。長すぎる場合だけここで区切る
+COMMAS = frozenset("、，")
+# 区切りの直後にあっても前のかたまりに含める記号（「！？」「…」の連続や閉じ括弧を分断しない）
+_TRAILING = SENTENCE_ENDS | COMMAS | frozenset("…‥・ー〜～」』）)】〕］]〉》”’\"'")
+DEFAULT_SOFT_LIMIT = 40
+
+
+def _consume_trailing(text: str, i: int) -> int:
+    """``text[i]`` 以降の記号・閉じ括弧の続きを読み飛ばした位置を返す。"""
+    while i < len(text) and text[i] in _TRAILING:
+        i += 1
+    return i
+
+
+def _is_punctuation_only(text: str) -> bool:
+    return all(unicodedata.category(ch)[0] in "PSZ" for ch in text)
+
+
+def _split_sentences(line: str) -> list[str]:
+    pieces = []
+    start = i = 0
+    while i < len(line):
+        if line[i] in SENTENCE_ENDS:
+            i = _consume_trailing(line, i + 1)
+            pieces.append(line[start:i])
+            start = i
+        else:
+            i += 1
+    pieces.append(line[start:])
+    return pieces
+
+
+def _split_long(sentence: str, soft_limit: int) -> list[str]:
+    """``soft_limit`` 文字を超える文を読点で分ける。読点がなければそのまま。"""
+    pieces = []
+    rest = sentence
+    while len(rest) > soft_limit:
+        # 読点の直後（続く記号を含む）の位置の候補。先頭の読点（中身のないかたまり）は使わない
+        cuts = []
+        for i, ch in enumerate(rest):
+            if ch in COMMAS:
+                end = _consume_trailing(rest, i + 1)
+                if not _is_punctuation_only(rest[:end]) and end < len(rest):
+                    cuts.append(end)
+        if not cuts:
+            break
+        before = [c for c in cuts if c <= soft_limit]
+        cut = before[-1] if before else cuts[0]
+        pieces.append(rest[:cut])
+        rest = rest[cut:]
+    pieces.append(rest)
+    return pieces
+
+
+def split_for_synthesis(text: str, soft_limit: int = DEFAULT_SOFT_LIMIT) -> list[str]:
+    """読み上げテキストを、合成・再生を早く始めるためのかたまりに分ける。
+
+    * 「。！？!?」の後（続く「！？」「…」や閉じ括弧も前に含める）と改行では必ず区切る。
+    * 読点「、，」では、かたまりが ``soft_limit`` 文字を超えるときだけ区切る（上限より前の最後の読点、
+      なければ上限より後の最初の読点）。読点ごとに区切るとそのたびにイントネーションがリセットされ、
+      不自然な読み方になるため。
+    * 句読点のない長い文は途中で切らない。空白だけのかたまりは捨て、記号だけのかたまりは前に連結する。
+    """
+    chunks: list[str] = []
+    for line in text.splitlines():
+        for sentence in _split_sentences(line):
+            for piece in _split_long(sentence, soft_limit):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                if chunks and _is_punctuation_only(piece):
+                    chunks[-1] += piece
+                elif len(chunks) == 1 and _is_punctuation_only(chunks[0]):
+                    chunks[0] += piece  # 先頭が記号だけだった場合は次に連結する
+                else:
+                    chunks.append(piece)
+    return chunks
 
 
 # --- 入退室 ---

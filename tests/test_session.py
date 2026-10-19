@@ -1,10 +1,10 @@
-"""GuildSession のスモークテスト（偽のボイスクライアント・偽のエンジンを使う）。"""
+"""GuildSession のテスト（偽のボイスクライアント・偽のエンジンを使う）。"""
 
 import asyncio
 import threading
 import time
 
-from yomi_kai.session import AFK_NOTICE, SYNTH_FAILED_NOTICE, GuildSession
+from yomi_kai.session import AFK_NOTICE, PREFETCH_CHUNKS, SYNTH_FAILED_NOTICE, GuildSession
 from yomi_kai.tts import Speaker
 
 ZUNDA = "ずんだもん"
@@ -147,7 +147,8 @@ def test_speaker_and_speed_reach_engine():
         session.enqueue("三", ZUNDA, 0.5)
 
         await wait_until(lambda: len(vc.played) == 3 and not vc.is_playing())
-        assert engine.calls == [("一", TSUMUGI, 1.5), ("二", ZUNDA, 1.0), ("三", ZUNDA, 0.5)]
+        # 合成は並行なので呼ばれる順番は問わない
+        assert sorted(engine.calls) == sorted([("一", TSUMUGI, 1.5), ("二", ZUNDA, 1.0), ("三", ZUNDA, 0.5)])
         await session.close()
 
     asyncio.run(run())
@@ -322,5 +323,163 @@ def test_skip_all_drops_playing_prefetched_and_queued():
         await wait_until(lambda: len(vc.played) == 2)
         assert vc.played[-1] == f"{ZUNDA}:五".encode()
         await session.close()
+
+    asyncio.run(run())
+
+
+# --- かたまりごとの合成・再生 ---
+
+
+class CountingEngine(FakeEngine):
+    """同時に合成している数の最大値を記録する偽エンジン。"""
+
+    def __init__(self, delays=None, fail=(), default_delay=0.0):
+        super().__init__(delays, fail)
+        self.default_delay = default_delay
+        self.active = 0
+        self.max_active = 0
+        self._guard = threading.Lock()
+
+    def synthesize(self, text, speaker, speed=1.0):
+        with self._guard:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            if text not in self.delays:
+                time.sleep(self.default_delay)
+            return super().synthesize(text, speaker, speed)
+        finally:
+            with self._guard:
+                self.active -= 1
+
+
+def wav(text, speaker=ZUNDA):
+    return f"{speaker}:{text}".encode()
+
+
+def test_message_is_split_and_chunks_play_in_order_despite_delays():
+    async def run():
+        # 1文目の合成が一番遅くても、再生はかたまりの順番どおり（メッセージをまたいでも）
+        engine = FakeEngine(delays={"一文目。": 0.15, "二文目！": 0.0, "三文目？": 0.05, "次の発言": 0.0})
+        session, _ = make_session(engine)
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+        session.enqueue("一文目。二文目！\n三文目？", ZUNDA)
+        session.enqueue("次の発言", TSUMUGI)
+        await wait_until(lambda: len(vc.played) == 4 and not vc.is_playing())
+        assert vc.played == [wav("一文目。"), wav("二文目！"), wav("三文目？"), wav("次の発言", TSUMUGI)]
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_synthesis_concurrency_is_bounded_by_prefetch():
+    async def run():
+        engine = CountingEngine(default_delay=0.05)
+        session, _ = make_session(engine)
+        vc = FakeVoiceClient(play_time=0.01)
+        await session.start(vc, FakeChannel())
+        session.enqueue("".join(f"文{i}。" for i in range(8)), ZUNDA)
+        session.enqueue("別の発言。もう一文。", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 10 and not vc.is_playing())
+        assert engine.max_active == PREFETCH_CHUNKS  # 並行に合成するが、上限は超えない
+        assert len(engine.calls) == 10
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_skip_mid_message_skips_remaining_chunks():
+    async def run():
+        engine = FakeEngine()
+        session, _ = make_session(engine)
+        vc = FakeVoiceClient(auto_finish=False)
+        await session.start(vc, FakeChannel())
+        session.enqueue("一。二。三。四。", ZUNDA)
+        session.enqueue("次。", TSUMUGI)
+        await wait_until(lambda: len(vc.played) == 1)
+        await asyncio.sleep(0.05)  # 「二。」「三。」「四。」が先読み合成される
+        assert session.skip()  # 残りのかたまり（合成済みのものも）をまとめて飛ばす
+        await wait_until(lambda: len(vc.played) == 2)
+        await asyncio.sleep(0.05)
+        assert vc.played == [wav("一。"), wav("次。", TSUMUGI)]
+        assert session.skip()
+        await wait_until(lambda: not session.is_busy)
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_skip_all_with_prefetched_chunks():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        vc = FakeVoiceClient(auto_finish=False)
+        await session.start(vc, FakeChannel())
+        session.enqueue("一。二。三。", ZUNDA)
+        session.enqueue("四。五。", ZUNDA)
+        session.enqueue("六。", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 1)
+        await asyncio.sleep(0.05)
+        assert session.skip_all() == 3  # メッセージ単位で数える
+        await asyncio.sleep(0.05)
+        assert vc.played == [wav("一。")]
+        assert not session.is_busy
+
+        vc.auto_finish = True
+        session.enqueue("七。八。", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 3)
+        assert vc.played[1:] == [wav("七。"), wav("八。")]
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_chunk_failure_notifies_once_per_message():
+    async def run():
+        engine = FakeEngine(fail={"二。", "三。", "五。"})
+        session, _ = make_session(engine)
+        vc, ch = FakeVoiceClient(), FakeChannel()
+        await session.start(vc, ch)
+        session.enqueue("一。二。三。四。", ZUNDA)
+        session.enqueue("五。六。", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 3 and not vc.is_playing())
+        await asyncio.sleep(0.05)
+        assert vc.played == [wav("一。"), wav("四。"), wav("六。")]  # 失敗したかたまりだけ飛ばす
+        assert ch.sent == [SYNTH_FAILED_NOTICE, SYNTH_FAILED_NOTICE]  # メッセージごとに1回
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_close_cancels_in_flight_synthesis():
+    async def run():
+        engine = FakeEngine(delays={"遅い一。": 0.3, "遅い二。": 0.3})
+        session, _ = make_session(engine)
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+        session.enqueue("遅い一。遅い二。", ZUNDA)
+        await asyncio.sleep(0.05)
+        tasks = [job.task for job in session._pipeline]
+        assert len(tasks) == 2
+        await session.close()
+        await asyncio.sleep(0)
+        assert all(t.cancelled() for t in tasks)
+        assert not session._pipeline and not session.is_busy
+        await asyncio.sleep(0.4)
+        assert vc.played == []
+
+    asyncio.run(run())
+
+
+def test_afk_waits_for_remaining_chunks():
+    async def run():
+        session, _ = make_session(FakeEngine(), afk_time=0.1)
+        vc, ch = FakeVoiceClient(play_time=0.15), FakeChannel()
+        await session.start(vc, ch)
+        session.enqueue("一。二。三。", ZUNDA)
+        await asyncio.sleep(0.3)  # AFK 時間を超えたが、まだ残りのかたまりを再生中
+        assert not vc.disconnected
+        await wait_until(lambda: vc.disconnected, timeout=3.0)
+        assert vc.played == [wav("一。"), wav("二。"), wav("三。")]
 
     asyncio.run(run())
