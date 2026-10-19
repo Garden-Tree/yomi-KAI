@@ -141,6 +141,20 @@ docker compose up -d
 - 自動切断までの時間
 - 読み上げる最大文字数 (`MAX_READ_LENGTH`、既定 100、0 で無制限)
 - VOICEVOXの音声モデルをすべて読み込むか (`VOICEVOX_LOAD_ALL_MODELS`、既定 False)
+- 切断通知の送信先 (`ALERT_WEBHOOK_URL`、既定は空 = 通知しない)
+- 切断通知を送るまでの秒数 (`ALERT_AFTER`、既定 300、30 以上)
+
+### 切断通知（任意）
+
+Bot が Discord から一定時間（`ALERT_AFTER` 秒）以上切断されたままになると、指定した Discord チャンネルに「yomi-KAI が 5分以上 Discord から切断されています」と通知し、復旧したら停止していた期間を通知します。ネットワークが落ちている間は、送れるようになるまで繰り返し送信を試みます。
+
+1. 通知を受け取りたいチャンネルの「チャンネルの編集」（歯車）→「連携サービス」→「ウェブフック」を開きます。
+1. 「新しいウェブフック」を作成し、「ウェブフックURLをコピー」を押します。
+1. `config.ini` に `ALERT_WEBHOOK_URL = コピーしたURL` を追加し、Bot を再起動します。
+
+Webhook の URL を知っていれば誰でもそのチャンネルに投稿できるため、他人に見せないでください（ログにも URL は出力しません）。
+
+> **ヘルスチェック（Docker）:** Bot は Discord に接続している間、`log/heartbeat` を30秒ごとに更新します。Docker 版では `python -m yomi_kai.health` がこれを確認し、180秒以上更新がなければコンテナの状態が `unhealthy` になります（`docker ps` で確認できます）。
 
 > **VOICEVOXのモデルについて:** 既定では `voicevox_core/models/vvms/0.vvm`（ずんだもん・春日部つむぎ・四国めたん・雨晴はう）だけを読み込みます。他の `.vvm` も配置して使いたい場合は `config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を追加してください。モデルを増やすほどメモリ使用量と起動時間が増えます。また、ドロップダウンに表示できる話者は Discord の制限により25件までです。
 

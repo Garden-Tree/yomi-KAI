@@ -36,4 +36,7 @@ COPY . .
 # timezone mapping default
 ENV TZ=Asia/Tokyo
 
+# Discord に接続している間、Bot が log/heartbeat を30秒ごとに更新する。180秒以上更新がなければ unhealthy
+HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 CMD python -m yomi_kai.health || exit 1
+
 CMD ["python", "yomi-KAI.py"]
