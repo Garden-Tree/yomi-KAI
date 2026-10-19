@@ -11,8 +11,8 @@ from discord.ext import commands
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
-from ..settings import SettingsStore, resolve_voice
-from ..text import build_read_text
+from ..settings import SettingsStore, resolve_voice, server_speaker
+from ..text import announce_text, build_read_text, voice_transition
 from ..tts import TTSEngine
 from ..ui import DropdownView
 
@@ -84,6 +84,11 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(
+            name=f"{prefix}announce `on|off`",
+            value=f"ボイスチャンネルへの入退室を読み上げるか設定します（サーバー全体）。`{prefix}announce`で現在の設定を表示します。",
+            inline=False,
+        )
+        help_embed.add_field(
             name=f"{prefix}dict",
             value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。",
             inline=False,
@@ -127,7 +132,7 @@ class VoiceCog(commands.Cog):
             logger.info("サーバーの話者を%sに変更しました (guild=%s)", name, guild_id)
 
         settings = await self.settings.aget(guild_id)
-        current = settings.speaker if settings.speaker in self.available_speakers else self.engine.default_speaker
+        current = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
         view = DropdownView(self.engine.speakers(), f"サーバーの話者: {current}", select_server_speaker)
         await ctx.send("話者を選んでください", view=view)
         connected_embed = discord.Embed(title="読み上げ開始", color=EMBED_COLOR)
@@ -261,3 +266,33 @@ class VoiceCog(commands.Cog):
             else:
                 await voice_client.disconnect(force=True)
                 logger.info(AFK_NOTICE)
+            return
+
+        await self._announce_voice(member, before, after, session)
+
+    async def _announce_voice(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+        session: GuildSession | None,
+    ) -> None:
+        """Bot のいるボイスチャンネルへの入退室を、サーバーの話者・標準の速度で読み上げる。"""
+        voice_client = member.guild.voice_client
+        if session is None or not session.is_connected or voice_client is None or voice_client.channel is None:
+            return
+        kind = voice_transition(
+            before.channel.id if before.channel is not None else None,
+            after.channel.id if after.channel is not None else None,
+            voice_client.channel.id,
+            is_bot=member.bot,
+        )
+        if kind is None:
+            return
+        settings = await self.settings.aget(member.guild.id)
+        if not settings.announce_voice:
+            return
+        text = announce_text(kind, member.display_name)
+        speaker = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
+        if session.enqueue(text, speaker, 1.0):
+            logger.info("入退室を読み上げキューに追加しました (guild=%s, %s)", member.guild.id, kind)

@@ -4,6 +4,7 @@
 
     {
       "speaker": "サーバーの話者（未設定なら省略）",
+      "announce_voice": true,
       "users": {
         "<user_id>": {"speaker": "個人の話者", "speed": 1.2}
       }
@@ -45,6 +46,8 @@ class UserSettings:
 class GuildSettings:
     speaker: str | None = None
     users: Mapping[int, UserSettings] = field(default_factory=dict)
+    # ボイスチャンネルへの入退室を読み上げるか（未設定なら読み上げる）
+    announce_voice: bool = True
 
     def user(self, user_id: int) -> UserSettings:
         return self.users.get(user_id) or UserSettings()
@@ -55,6 +58,9 @@ class GuildSettings:
         speaker = data.get("speaker")
         if speaker is not None and not isinstance(speaker, str):
             raise ValueError("speaker は文字列で指定してください")
+        announce_voice = data.get("announce_voice", True)
+        if not isinstance(announce_voice, bool):
+            raise ValueError("announce_voice は true / false で指定してください")
         raw_users = data.get("users", {})
         if not isinstance(raw_users, dict):
             raise ValueError("users はオブジェクトで指定してください")
@@ -73,10 +79,17 @@ class GuildSettings:
             if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))):
                 raise ValueError(f"users[{key!r}].speed は数値で指定してください")
             users[user_id] = UserSettings(user_speaker, None if speed is None else float(speed))
-        return cls(speaker, users)
+        return cls(speaker, users, announce_voice)
 
 
 EMPTY_SETTINGS = GuildSettings()
+
+
+def server_speaker(
+    settings: GuildSettings, available_speakers: set[str] | frozenset[str], engine_default: str
+) -> str:
+    """サーバーの話者（未設定・利用できない場合はエンジンの既定話者）。"""
+    return settings.speaker if settings.speaker in available_speakers else engine_default
 
 
 def resolve_voice(
@@ -176,6 +189,13 @@ class SettingsStore:
             return raw.pop("speaker", None) is not None
 
         return self._update(guild_id, mutate)
+
+    def set_announce_voice(self, guild_id: int, enabled: bool) -> None:
+        def mutate(raw: dict[str, Any]) -> bool:
+            raw["announce_voice"] = bool(enabled)
+            return True
+
+        self._update(guild_id, mutate)
 
     def _set_user_field(self, guild_id: int, user_id: int, key: str, value: Any) -> None:
         def mutate(raw: dict[str, Any]) -> bool:

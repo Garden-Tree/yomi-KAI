@@ -1,4 +1,4 @@
-"""ユーザーごとの読み上げ設定コマンド（voice / speed）。"""
+"""読み上げ設定コマンド（ユーザーごとの voice / speed、サーバー全体の announce）。"""
 
 from __future__ import annotations
 
@@ -83,6 +83,22 @@ class SettingsCog(commands.Cog):
         current = saved if saved in self.available_speakers else "未設定（サーバー設定に従う）"
         view = DropdownView(self.engine.speakers(), f"あなたの話者: {current}", select_user_speaker)
         await ctx.send("自分の話者を選んでください", view=view)
+
+    @commands.command(name="announce")
+    @commands.guild_only()
+    async def announce(self, ctx: commands.Context, *args: str) -> None:
+        guild_id = ctx.guild.id
+        if not args:
+            enabled = (await self.settings.aget(guild_id)).announce_voice
+            await ctx.channel.send(f"入退室の読み上げは現在{'オン' if enabled else 'オフ'}です")
+            return
+        if args not in (("on",), ("off",)):
+            await self._invalid(ctx)
+            return
+        enabled = args == ("on",)
+        await asyncio.to_thread(self.settings.set_announce_voice, guild_id, enabled)
+        await ctx.channel.send(f"入退室の読み上げを{'オン' if enabled else 'オフ'}にしました")
+        logger.info("入退室の読み上げを%sにしました (guild=%s)", "オン" if enabled else "オフ", guild_id)
 
     @commands.command(name="speed")
     @commands.guild_only()

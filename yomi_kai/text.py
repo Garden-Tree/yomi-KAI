@@ -132,6 +132,36 @@ def build_read_text(
     return truncate(text, max_length)
 
 
+# --- 入退室 ---
+JOIN = "join"
+LEAVE = "leave"
+
+
+def voice_transition(
+    before_channel_id: int | None,
+    after_channel_id: int | None,
+    bot_channel_id: int | None,
+    *,
+    is_bot: bool,
+) -> str | None:
+    """Bot のいるボイスチャンネルへの入室なら ``JOIN``、退室なら ``LEAVE``、それ以外は None。
+
+    チャンネル間の移動は、Bot のいるチャンネルから出れば退室、入れば入室として扱う。
+    ミュート・配信など、チャンネルが変わらない更新は None。Bot（他の Bot を含む）は対象外。
+    """
+    if is_bot or bot_channel_id is None or before_channel_id == after_channel_id:
+        return None
+    if after_channel_id == bot_channel_id:
+        return JOIN
+    if before_channel_id == bot_channel_id:
+        return LEAVE
+    return None
+
+
+def announce_text(kind: str, display_name: str) -> str:
+    return f"{display_name}さんが{'入室' if kind == JOIN else '退室'}しました"
+
+
 def gen_sd_text(msg: str) -> str:
     """「突然の死」風のテキストを生成する。"""
     length = sum(2 if east_asian_width(ch) in "FWA" else 1 for ch in msg)
