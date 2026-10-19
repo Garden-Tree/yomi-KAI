@@ -13,8 +13,9 @@ MAX_READ_LENGTH = 100
 ;読み上げる最大文字数。超えた分は「以下略」になります。0 で無制限
 ;VOICEVOX_LOAD_ALL_MODELS = False
 ;True にすると voicevox_core/models/vvms/ の *.vvm をすべて読み込みます（既定は 0.vvm のみ）
-;VOICEVOX_WORKERS = 2
-;同時に音声合成する数（1〜8、既定 2）。増やすと速くなりますが、1つにつき約130〜180MBのメモリを使います
+;VOICEVOX_WORKERS = 1
+;同時に音声合成する数（1〜8、既定 1）。増やすと速くなりますが、メモリを多く使います
+;（合成を続けたあとの目安: 1 で約280MB、2 で約530MB、4 で約890MB。Windows・0.vvm のみで計測）
 ;ALERT_WEBHOOK_URL = https://discord.com/api/webhooks/xxxx/yyyy
 ;Discord から長時間切断されたときに通知を送る Webhook の URL。空または未設定なら通知しません
 ;（チャンネルの設定 → 連携サービス → ウェブフック → 新しいウェブフック → ウェブフックURLをコピー）

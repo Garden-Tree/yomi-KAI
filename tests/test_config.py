@@ -51,7 +51,7 @@ def test_invalid_alert_settings(tmp_path, extra, key):
 
 
 def test_voicevox_workers(tmp_path):
-    assert load(tmp_path).voicevox_workers == 2
+    assert load(tmp_path).voicevox_workers == 1
     assert load(tmp_path, "VOICEVOX_WORKERS = 4\n").voicevox_workers == 4
 
 

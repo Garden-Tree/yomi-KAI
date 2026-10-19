@@ -41,7 +41,8 @@ NORMAL_STYLE = "ノーマル"
 # Discord の Select は25択まで
 MAX_OPTIONS = 25
 # 並行して合成できる数（Synthesizer の数）
-DEFAULT_WORKERS = 2
+# 既定は1（メモリの少ない環境でも動くように。1つ増やすごとに RSS が約250MB増える）
+DEFAULT_WORKERS = 1
 MAX_WORKERS = 8
 
 

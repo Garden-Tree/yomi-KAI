@@ -4,7 +4,7 @@
 DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
 ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
-VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 2）を追加している。
+VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）を追加している。
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class Config:
     max_read_length: int = 100
     alert_webhook_url: str | None = None
     alert_after: int = 300
-    voicevox_workers: int = 2
+    voicevox_workers: int = 1
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
@@ -113,7 +113,7 @@ def load_config(path: str | Path = "config.ini") -> Config:
             raise ConfigError(
                 f"config.ini の `ALERT_AFTER` は秒数（整数）で指定してください（現在値: {alert_raw!r}）。"
             ) from None
-        workers_raw = (section.get("VOICEVOX_WORKERS") or "").strip() or "2"
+        workers_raw = (section.get("VOICEVOX_WORKERS") or "").strip() or "1"
         try:
             voicevox_workers = int(workers_raw)
         except ValueError:
