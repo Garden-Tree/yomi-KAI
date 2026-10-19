@@ -213,6 +213,31 @@ def announce_text(kind: str, display_name: str) -> str:
     return f"{display_name}さんが{'入室' if kind == JOIN else '退室'}しました"
 
 
+def chunk_lines(lines: Sequence[str], limit: int = 1900) -> list[str]:
+    """行を改行でつなぎ、1つあたり ``limit`` 文字以内のかたまりに分ける（Discord の2000文字制限対策）。
+
+    1行が ``limit`` を超える場合はその行を途中で分割する。
+    """
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def gen_sd_text(msg: str) -> str:
     """「突然の死」風のテキストを生成する。"""
     length = sum(2 if east_asian_width(ch) in "FWA" else 1 for ch in msg)

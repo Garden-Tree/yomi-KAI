@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from yomi_kai.tts import CompositeEngine, Speaker
+from yomi_kai.tts import CompositeEngine, Speaker, find_speakers
 
 
 class RecordingEngine:
@@ -119,3 +119,35 @@ def test_voicevox_engine_serializes_synthesis():
     assert results == [b"wav"] * len(speeds)
     assert fake.calls == 6 + 6 * 2  # 速度 1.0 は tts、それ以外は create_audio_query + synthesis
     assert fake.max_active == 1
+
+
+# --- 話者名の検索 ---
+
+NAMES = ["ずんだもん", "春日部つむぎ", "四国めたん", "四国めたん（あまあま）", "ずんだもん（あまあま）", "雨晴はう"]
+
+
+def test_find_speakers_exact_wins_over_prefix():
+    assert find_speakers("ずんだもん", NAMES) == ["ずんだもん"]
+    assert find_speakers("四国めたん", NAMES) == ["四国めたん"]
+
+
+def test_find_speakers_unique_prefix_or_partial():
+    assert find_speakers("春日部", NAMES) == ["春日部つむぎ"]
+    assert find_speakers("はう", NAMES) == ["雨晴はう"]
+    assert find_speakers("つむぎ", NAMES) == ["春日部つむぎ"]
+
+
+def test_find_speakers_ambiguous_returns_candidates_in_order():
+    assert find_speakers("めたん", NAMES) == ["四国めたん", "四国めたん（あまあま）"]
+    assert find_speakers("あまあま", NAMES) == ["四国めたん（あまあま）", "ずんだもん（あまあま）"]
+    assert find_speakers("四国", NAMES) == ["四国めたん", "四国めたん（あまあま）"]
+
+
+def test_find_speakers_normalizes_width_and_case():
+    assert find_speakers("四国めたん(あまあま)", NAMES) == ["四国めたん（あまあま）"]
+    assert find_speakers("JA-JP-WAVENET-a", ["ja-JP-Wavenet-A", "ja-JP-Wavenet-D"]) == ["ja-JP-Wavenet-A"]
+
+
+def test_find_speakers_not_found():
+    assert find_speakers("存在しない", NAMES) == []
+    assert find_speakers("  ", NAMES) == []

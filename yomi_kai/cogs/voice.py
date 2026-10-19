@@ -72,7 +72,11 @@ class VoiceCog(commands.Cog):
         )
         help_embed.add_field(
             name=f"{prefix}voice",
-            value=f"自分の話者を選びます。`{prefix}voice reset`で個人設定を解除し、サーバーの話者に戻します。",
+            value=(
+                f"自分の話者を選びます。`{prefix}voice 名前`で名前を指定して設定、"
+                f"`{prefix}voice list`で話者の一覧を表示、"
+                f"`{prefix}voice reset`で個人設定を解除し、サーバーの話者に戻します。"
+            ),
             inline=False,
         )
         help_embed.add_field(

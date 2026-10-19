@@ -5,6 +5,7 @@ from yomi_kai.text import (
     LEAVE,
     announce_text,
     build_read_text,
+    chunk_lines,
     compile_dictionary,
     gen_sd_text,
     strip_markdown,
@@ -169,3 +170,17 @@ def test_voice_transition_ignores_bots_and_unconnected():
 def test_announce_text():
     assert announce_text(JOIN, "たろう") == "たろうさんが入室しました"
     assert announce_text(LEAVE, "たろう") == "たろうさんが退室しました"
+
+
+# --- 長いメッセージの分割 ---
+
+
+def test_chunk_lines():
+    assert chunk_lines(["a", "b", "c"], limit=3) == ["a\nb", "c"]
+    assert chunk_lines(["abc", "d"], limit=3) == ["abc", "d"]
+    assert chunk_lines(["abcdefg", "h"], limit=3) == ["abc", "def", "g\nh"]
+    assert chunk_lines([]) == []
+    lines = [f"話者{i}" for i in range(1000)]
+    chunks = chunk_lines(lines)
+    assert all(len(c) <= 1900 for c in chunks)
+    assert "\n".join(chunks).split("\n") == lines

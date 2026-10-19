@@ -11,13 +11,16 @@ from discord.ext import commands
 
 from ..config import Config
 from ..settings import DEFAULT_SPEED, SPEED_MAX, SPEED_MIN, SettingsStore
-from ..tts import TTSEngine
-from ..ui import DropdownView
+from ..text import chunk_lines
+from ..tts import TTSEngine, find_speakers
+from ..ui import MAX_OPTIONS, DropdownView
 from .voice import SAVE_FAILED_NOTICE
 
 logger = logging.getLogger(__name__)
 
 SPEED_INVALID_NOTICE = "速度は0.5〜2.0の数値で指定してください"
+# 話者名が曖昧なときに表示する候補の数
+MAX_CANDIDATES = 10
 
 
 def format_speed(speed: float) -> str:
@@ -62,8 +65,11 @@ class SettingsCog(commands.Cog):
             await ctx.channel.send("話者の個人設定を解除しました")
             logger.info("%sさんの話者の個人設定を解除しました (guild=%s)", ctx.author, guild_id)
             return
+        if args == ("list",):
+            await self._send_speaker_list(ctx)
+            return
         if args:
-            await self._invalid(ctx)
+            await self._set_speaker_by_name(ctx, " ".join(args))
             return
 
         async def select_user_speaker(interaction: discord.Interaction, name: str) -> None:
@@ -81,8 +87,39 @@ class SettingsCog(commands.Cog):
         settings = await self.settings.aget(guild_id)
         saved = settings.user(ctx.author.id).speaker
         current = saved if saved in self.available_speakers else "未設定（サーバー設定に従う）"
-        view = DropdownView(self.engine.speakers(), f"あなたの話者: {current}", select_user_speaker)
-        await ctx.send("自分の話者を選んでください", view=view)
+        speakers = self.engine.speakers()
+        view = DropdownView(speakers, f"あなたの話者: {current}", select_user_speaker)
+        message = "自分の話者を選んでください"
+        if len(speakers) > MAX_OPTIONS:
+            message += (
+                f"（話者が{len(speakers)}件あるため先頭{MAX_OPTIONS}件のみ表示しています。"
+                f"`{self.config.prefix}voice list`で一覧を確認し、`{self.config.prefix}voice 名前`で指定できます）"
+            )
+        await ctx.send(message, view=view)
+
+    async def _send_speaker_list(self, ctx: commands.Context) -> None:
+        names = [s.name for s in self.engine.speakers()]
+        lines = [f"使える話者（{len(names)}件）:", *names]
+        for chunk in chunk_lines(lines):
+            await ctx.channel.send(chunk)
+
+    async def _set_speaker_by_name(self, ctx: commands.Context, query: str) -> None:
+        names = [s.name for s in self.engine.speakers()]
+        found = find_speakers(query, names)
+        if not found:
+            await ctx.channel.send(
+                f"話者「{query}」が見つかりません。`{self.config.prefix}voice list`で話者の一覧を確認できます"
+            )
+            return
+        if len(found) > 1:
+            shown = "、".join(found[:MAX_CANDIDATES])
+            more = f" ほか{len(found) - MAX_CANDIDATES}件" if len(found) > MAX_CANDIDATES else ""
+            await ctx.channel.send(f"「{query}」に当てはまる話者が複数あります: {shown}{more}")
+            return
+        name = found[0]
+        await asyncio.to_thread(self.settings.set_user_speaker, ctx.guild.id, ctx.author.id, name)
+        await ctx.channel.send(f"{ctx.author.display_name}さんの話者を{name}にしました")
+        logger.info("%sさんの話者を%sに変更しました (guild=%s)", ctx.author, name, ctx.guild.id)
 
     @commands.command(name="announce")
     @commands.guild_only()
