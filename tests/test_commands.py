@@ -20,10 +20,10 @@ GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
 GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots"}
 TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit"}
 # 「サーバー管理」の権限が必要なコマンド
-ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots"}
+ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots", "dict import"}
 # サブコマンド（プレフィックスでの名前）
-SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help", "ignore add", "ignore del", "ignore list"}
-SUBCOMMANDS |= {"autojoin add", "autojoin del", "autojoin list"}
+SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help", "dict export", "dict import"}
+SUBCOMMANDS |= {"ignore add", "ignore del", "ignore list", "autojoin add", "autojoin del", "autojoin list"}
 
 
 class StubEngine:
@@ -69,7 +69,7 @@ def test_app_commands_registered_and_synced(setup_result):
     app = setup_result["app"]
     assert set(app) == TOP_LEVEL
     assert setup_result["sync_calls"] == 1
-    assert {c.name for c in app["dict"].commands} == {"add", "del", "list", "help"}
+    assert {c.name for c in app["dict"].commands} == {"add", "del", "list", "help", "export", "import"}
     for name, command in app.items():
         assert command.description and command.description != "…", name
         assert name.isascii() and name == name.lower()

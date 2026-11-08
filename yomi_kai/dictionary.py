@@ -88,6 +88,29 @@ class DictionaryStore:
             self._cache[guild_id] = compile_dictionary(words)
             return True
 
+    def merge(self, guild_id: int, entries: dict[str, str], *, max_entries: int = 0) -> tuple[int, int, int]:
+        """複数の単語をまとめて登録する（同じ単語は ``entries`` の読みで上書き）。(追加, 更新, 上限で飛ばした) を返す。
+
+        ``max_entries`` が 1 以上なら、新しい単語は上限に収まる分だけ（``entries`` の順に）追加する。
+        """
+        with self._lock:
+            words = self._read_words(guild_id)
+            added = updated = skipped = 0
+            for word, reading in entries.items():
+                if word in words:
+                    if words[word] != reading:
+                        updated += 1
+                    words[word] = reading
+                elif max_entries > 0 and len(words) >= max_entries:
+                    skipped += 1
+                else:
+                    words[word] = reading
+                    added += 1
+            if added or updated:
+                self._write_words(guild_id, words)
+                self._cache[guild_id] = compile_dictionary(words)
+            return added, updated, skipped
+
     def remove(self, guild_id: int, word: str) -> bool:
         """単語を削除する。未登録なら False を返し、ファイルは変更しない。"""
         with self._lock:

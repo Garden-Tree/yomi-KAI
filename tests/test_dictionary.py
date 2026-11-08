@@ -179,3 +179,95 @@ def test_dict_add_command_refuses_when_full(tmp_path, slash):
     ]
     assert "embed" in update.sent[0][1]
     assert store.words(GUILD) == {"a": "あ"}
+
+
+# --- エクスポート・インポート ---
+
+
+def test_merge_respects_limit_and_overwrites(tmp_path):
+    store = DictionaryStore(tmp_path / "dict")
+    store.add(GUILD, "a", "えー")
+    store.add(GUILD, "b", "びー")
+    added, updated, skipped = store.merge(GUILD, {"a": "あ", "b": "びー", "c": "しー", "d": "でぃー"}, max_entries=3)
+    assert (added, updated, skipped) == (1, 1, 1)
+    assert store.words(GUILD) == {"a": "あ", "b": "びー", "c": "しー"}
+    assert read_json(store.path_for(GUILD)) == {"a": "あ", "b": "びー", "c": "しー"}
+    assert store.merge(GUILD, {"d": "でぃー"}) == (1, 0, 0)  # 0 は無制限
+
+
+def test_export_matches_store_format_and_round_trips(tmp_path):
+    from yomi_kai.cogs.dictionary import export_dictionary, parse_dictionary_import
+
+    store = DictionaryStore(tmp_path / "dict")
+    store.add(GUILD, "yomi-KAI", "よみかい")
+    data = export_dictionary(store.words(GUILD))
+    # 改行コード以外はストアのファイルと同じ（ストアはテキストモードで書くため Windows では CRLF）
+    assert data.decode("utf-8") == store.path_for(GUILD).read_text(encoding="utf-8")
+    assert parse_dictionary_import(data) == {"yomi-KAI": "よみかい"}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [b"{broken", b"[]", b'{"a": 1}', b'{"a": ""}', b'{" ": "x"}', b"\xff\xfe", "too-large"],
+)
+def test_parse_import_rejects_invalid(data):
+    from yomi_kai.cogs.dictionary import parse_dictionary_import
+
+    if data == "too-large":
+        data = b'{"a": "' + b"x" * 102400 + b'"}'
+    with pytest.raises(ValueError):
+        parse_dictionary_import(data)
+
+
+class FakeAttachment:
+    def __init__(self, data):
+        self.data = data
+        self.size = len(data)
+
+    async def read(self):
+        return self.data
+
+
+class ImportCtx(FakeCtx):
+    async def defer(self):
+        pass
+
+
+@pytest.mark.parametrize("slash", [False, True])
+def test_dict_import_command(tmp_path, slash):
+    from yomi_kai.cogs.dictionary import DictionaryCog
+    from yomi_kai.config import Config
+
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", max_dict_entries=2)
+    store = DictionaryStore(tmp_path / "dict")
+    store.add(GUILD, "a", "えー")
+    cog = DictionaryCog(SimpleNamespace(), config, store)
+
+    async def run():
+        ok, bad = ImportCtx(slash), ImportCtx(slash)
+        payload = '{"a": "あ", "b": "びー", "c": "しー"}'.encode()
+        await DictionaryCog.dict_import.callback(cog, ok, FakeAttachment(payload))
+        await DictionaryCog.dict_import.callback(cog, bad, FakeAttachment(b"[]"))
+        return ok, bad
+
+    ok, bad = asyncio.run(run())
+    expected = "辞書を読み込みました（追加 1件、更新 1件）。登録数の上限（2件）のため 1件は追加しませんでした"
+    assert ok.sent == [(expected, {"ephemeral": False})]
+    assert bad.sent[0][0].startswith("辞書を読み込めませんでした")
+    assert bad.sent[0][1] == {"ephemeral": slash}
+    assert store.words(GUILD) == {"a": "あ", "b": "びー"}
+
+
+def test_dict_export_command(tmp_path):
+    from yomi_kai.cogs.dictionary import DictionaryCog
+    from yomi_kai.config import Config
+
+    store = DictionaryStore(tmp_path / "dict")
+    store.add(GUILD, "a", "えー")
+    cog = DictionaryCog(SimpleNamespace(), Config(discord_token="d", prefix="y.", afk_time=60, sd_msg="x"), store)
+    ctx = FakeCtx(True)
+    asyncio.run(DictionaryCog.dict_export.callback(cog, ctx))
+    content, kwargs = ctx.sent[0]
+    assert content == "辞書を書き出しました（1件）"
+    assert kwargs["file"].filename == f"dict-{GUILD}.json"
+    assert json.loads(kwargs["file"].fp.read()) == {"a": "えー"}
