@@ -37,6 +37,31 @@ def build_engine(config: Config) -> TTSEngine:
     return CompositeEngine([google, voicevox], default_speaker=google.default_speaker)
 
 
+def apply_speaker_allowlist(engine: TTSEngine, allowlist: tuple[str, ...]) -> TTSEngine:
+    """SPEAKER_ALLOWLIST が指定されていれば、話者をその名前に絞ったエンジンを返す。
+
+    存在しない名前は警告し、使える話者が1つも残らなければ :class:`ConfigError` を送出する。
+    """
+    if not allowlist:
+        return engine
+    from .tts import FilteredEngine
+
+    try:
+        filtered = FilteredEngine(engine, allowlist)
+    except ValueError:
+        raise ConfigError(
+            "config.ini の `SPEAKER_ALLOWLIST` に使える話者がありません。"
+            f"`{'` `'.join(allowlist)}` はいずれも見つかりませんでした"
+            "（話者の名前は `voice list` の表示どおりにカンマ区切りで指定してください）。"
+        ) from None
+    if filtered.unknown:
+        logger.warning("SPEAKER_ALLOWLIST の次の話者は見つからないため無視します: %s", "、".join(filtered.unknown))
+    logger.info(
+        "話者を%d件に絞りました（既定の話者: %s）", len(filtered.speakers()), filtered.default_speaker
+    )
+    return filtered
+
+
 class YomiBot(commands.Bot):
     def __init__(
         self,
@@ -179,6 +204,11 @@ def main(config_path: str = "config.ini") -> None:
             "音声合成エンジンの初期化に失敗しました。"
             "`voicevox_core`フォルダ内にモデルや辞書データが正しく配置されているか確認してください。"
         )
+        sys.exit(1)
+    try:
+        engine = apply_speaker_allowlist(engine, config.speaker_allowlist)
+    except ConfigError as e:
+        logger.error("%s", e)
         sys.exit(1)
 
     Path("dict").mkdir(exist_ok=True)

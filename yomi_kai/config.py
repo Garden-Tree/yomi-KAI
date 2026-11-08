@@ -5,7 +5,8 @@ DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
 ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
 VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
-LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、USAGE_DIR（使用量の保存先、既定 usage）を追加している。
+LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、USAGE_DIR（使用量の保存先、既定 usage）、
+MAX_DICT_ENTRIES（辞書の登録数の上限、既定 0 = 無制限）、SPEAKER_ALLOWLIST（使える話者、既定は全話者）を追加している。
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ class Config:
     usage_dir: str = "usage"
     # サーバーごとの辞書の登録数の上限（0 で無制限）
     max_dict_entries: int = 0
+    # 使える話者の名前（空なら全話者）
+    speaker_allowlist: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
@@ -48,7 +51,7 @@ class Config:
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
             f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
             f"log_read_text={self.log_read_text}, usage_dir={self.usage_dir!r}, "
-            f"max_dict_entries={self.max_dict_entries})"
+            f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r})"
         )
 
 
@@ -148,6 +151,9 @@ def load_config(path: str | Path = "config.ini") -> Config:
             raise ConfigError(
                 f"config.ini の `MAX_DICT_ENTRIES` は 0 以上で指定してください（現在値: {dict_raw!r}）。"
             )
+        speaker_allowlist = tuple(
+            dict.fromkeys(name.strip() for name in (section.get("SPEAKER_ALLOWLIST") or "").split(",") if name.strip())
+        )
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
         raise ConfigError(f"config.ini の読み込みに失敗しました: {e}") from None
@@ -167,4 +173,5 @@ def load_config(path: str | Path = "config.ini") -> Config:
         log_read_text=log_read_text,
         usage_dir=usage_dir,
         max_dict_entries=max_dict_entries,
+        speaker_allowlist=speaker_allowlist,
     )

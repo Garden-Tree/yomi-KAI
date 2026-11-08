@@ -74,3 +74,10 @@ def test_max_dict_entries(tmp_path):
     for value in ("-1", "many"):
         with pytest.raises(ConfigError, match="MAX_DICT_ENTRIES"):
             load(tmp_path, f"MAX_DICT_ENTRIES = {value}\n")
+
+
+def test_speaker_allowlist(tmp_path):
+    assert load(tmp_path).speaker_allowlist == ()
+    assert load(tmp_path, "SPEAKER_ALLOWLIST =\n").speaker_allowlist == ()
+    config = load(tmp_path, "SPEAKER_ALLOWLIST = ずんだもん, 春日部つむぎ ,,四国めたん（あまあま）,ずんだもん\n")
+    assert config.speaker_allowlist == ("ずんだもん", "春日部つむぎ", "四国めたん（あまあま）")
