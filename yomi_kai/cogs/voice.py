@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
@@ -37,6 +38,7 @@ class VoiceCog(commands.Cog):
         source_factory: SourceFactory,
         *,
         usage: UsageStore | None = None,
+        blocklist: GuildBlocklist | None = None,
     ) -> None:
         self.bot = bot
         self.config = config
@@ -45,6 +47,8 @@ class VoiceCog(commands.Cog):
         self.settings = settings
         # 使用量の計測（None なら記録しない）
         self.usage = usage
+        # 利用を断るサーバー（None ならブロックしない）
+        self.blocklist = blocklist
         self.available_speakers = frozenset(s.name for s in engine.speakers())
         self.source_factory = source_factory
         # guild.id -> GuildSession（サーバーごとの状態はここにだけ持つ）
@@ -226,6 +230,8 @@ class VoiceCog(commands.Cog):
         # DMなど、サーバー外のメッセージは無視
         guild = message.guild
         if guild is None:
+            return
+        if self.blocklist is not None and self.blocklist.is_blocked(guild.id):
             return
 
         session = self.sessions.get(guild.id)

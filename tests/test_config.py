@@ -81,3 +81,8 @@ def test_speaker_allowlist(tmp_path):
     assert load(tmp_path, "SPEAKER_ALLOWLIST =\n").speaker_allowlist == ()
     config = load(tmp_path, "SPEAKER_ALLOWLIST = ずんだもん, 春日部つむぎ ,,四国めたん（あまあま）,ずんだもん\n")
     assert config.speaker_allowlist == ("ずんだもん", "春日部つむぎ", "四国めたん（あまあま）")
+
+
+def test_blocked_guilds_file(tmp_path):
+    assert load(tmp_path).blocked_guilds_file == "settings/blocked_guilds.txt"
+    assert load(tmp_path, "BLOCKED_GUILDS_FILE = data/block.txt\n").blocked_guilds_file == "data/block.txt"

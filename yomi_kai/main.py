@@ -6,11 +6,13 @@ import asyncio
 import logging
 import math
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 import discord
 from discord.ext import commands
 
+from .blocklist import CHECK_INTERVAL, GuildBlocklist
 from .config import Config, ConfigError, load_config
 from .dictionary import DictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
@@ -83,6 +85,10 @@ class YomiBot(commands.Bot):
         self.usage = usage if usage is not None else UsageStore(config.usage_dir)
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._usage_task: asyncio.Task[None] | None = None
+        # 利用を断るサーバー。ブロックされたサーバーのコマンド・スラッシュコマンドはグローバルチェックで無視する
+        self.blocklist = GuildBlocklist(config.blocked_guilds_file)
+        self._blocklist_task: asyncio.Task[None] | None = None
+        self.add_check(self._not_blocked)
         # on_disconnect で True、on_ready / on_resumed で False（is_ready() は切断中も True のままのことがある）
         self._gateway_down = True
         self.alerter: DisconnectAlerter | None = None
@@ -118,6 +124,8 @@ class YomiBot(commands.Bot):
             self._heartbeat_task.cancel()
         if self._usage_task is not None:
             self._usage_task.cancel()
+        if self._blocklist_task is not None:
+            self._blocklist_task.cancel()
         if self.alerter is not None:
             await self.alerter.close()
         # Cog の取り外し（読み上げの停止）まで済んでから、残りの使用量を書き込む
@@ -127,8 +135,53 @@ class YomiBot(commands.Bot):
         except Exception:
             logger.exception("使用量の書き込みに失敗しました")
 
+    # --- ブロックリスト（yomi_kai.blocklist） ---
+    async def _not_blocked(self, ctx: commands.Context) -> bool:
+        return not (ctx.guild is not None and self.blocklist.is_blocked(ctx.guild.id))
+
+    async def on_message(self, message: discord.Message) -> None:
+        # ブロックされたサーバーのプレフィックスのコマンドは処理しない（読み上げは VoiceCog 側で弾く）
+        if message.guild is not None and self.blocklist.is_blocked(message.guild.id):
+            return
+        await self.process_commands(message)
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        if self.blocklist.is_blocked(guild.id):
+            await self.leave_blocked_guild(guild)
+
+    async def leave_blocked_guild(self, guild: discord.Guild) -> None:
+        """ブロックされたサーバーの読み上げを止めて退出する。"""
+        logger.warning("ブロックリストにあるサーバーから退出します (guild=%s, name=%s)", guild.id, guild.name)
+        voice = self.get_cog("VoiceCog")
+        session = getattr(voice, "sessions", {}).get(guild.id)
+        if session is not None and session.is_connected:
+            await session.close()
+        try:
+            await guild.leave()
+        except Exception:
+            logger.exception("サーバーからの退出に失敗しました (guild=%s)", guild.id)
+
+    async def enforce_blocklist(self, guilds: Iterable[discord.Guild] | None = None) -> None:
+        """参加中のサーバーのうち、ブロックされているものから退出する。"""
+        for guild in list(self.guilds if guilds is None else guilds):
+            if self.blocklist.is_blocked(guild.id):
+                await self.leave_blocked_guild(guild)
+
+    async def _watch_blocklist(self, interval: float = CHECK_INTERVAL) -> None:
+        """ブロックリストの更新を interval 秒ごとに確認し、新たにブロックされたサーバーから退出する。"""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                added = await asyncio.to_thread(self.blocklist.reload_if_changed)
+                if added and self.is_ready():
+                    await self.enforce_blocklist()
+            except Exception:
+                logger.exception("ブロックリストの確認に失敗しました")
+
     async def setup_hook(self) -> None:
         self._start_monitoring()
+        await asyncio.to_thread(self.blocklist.reload_if_changed)
+        self._blocklist_task = asyncio.create_task(self._watch_blocklist(), name="yomi-kai-blocklist")
 
         from .cogs.dictionary import DictionaryCog
         from .cogs.misc import MiscCog
@@ -147,6 +200,7 @@ class YomiBot(commands.Bot):
                 self.settings,
                 ffmpeg_source_factory(ffmpeg_path),
                 usage=self.usage,
+                blocklist=self.blocklist,
             )
         )
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
@@ -171,10 +225,13 @@ class YomiBot(commands.Bot):
         if self.alerter is not None:
             self.alerter.connected()
         logger.info("Launch complete! Logged in as [%s]. PREFIX is [%s].", self.user.name, self.config.prefix)
+        await self.enforce_blocklist()
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         if isinstance(error, commands.CommandNotFound):
             return
+        if ctx.guild is not None and self.blocklist.is_blocked(ctx.guild.id):
+            return  # ブロックされたサーバー（グローバルチェックで弾いたもの）には何も返さない
         if isinstance(error, commands.UserInputError):
             # 引数の誤りは各 Cog の cog_command_error が案内を返す
             logger.debug("コマンドの引数が不正です: %s", error)
