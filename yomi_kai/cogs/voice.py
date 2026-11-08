@@ -259,7 +259,9 @@ class VoiceCog(commands.Cog):
             logger.info(
                 "読み上げキューに追加しました (guild=%s, %d文字, %s, %s倍)", guild.id, len(read_msg), speaker, speed
             )
-            logger.debug("ReadSentence:%s", read_msg)
+            # 本文は LOG_READ_TEXT = True のときだけ記録する（既定では文字数だけ）
+            if self.config.log_read_text:
+                logger.debug("ReadSentence:%s", read_msg)
 
     @commands.Cog.listener()
     async def on_voice_state_update(

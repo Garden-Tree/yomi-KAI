@@ -55,6 +55,13 @@ def test_voicevox_workers(tmp_path):
     assert load(tmp_path, "VOICEVOX_WORKERS = 4\n").voicevox_workers == 4
 
 
+def test_log_read_text(tmp_path):
+    assert load(tmp_path).log_read_text is False
+    assert load(tmp_path, "LOG_READ_TEXT = True\n").log_read_text is True
+    with pytest.raises(ConfigError, match="LOG_READ_TEXT"):
+        load(tmp_path, "LOG_READ_TEXT = maybe\n")
+
+
 @pytest.mark.parametrize("value", ["0", "9", "two"])
 def test_invalid_voicevox_workers(tmp_path, value):
     with pytest.raises(ConfigError, match="VOICEVOX_WORKERS"):

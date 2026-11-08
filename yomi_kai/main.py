@@ -134,7 +134,7 @@ class YomiBot(commands.Bot):
 
 
 def main(config_path: str = "config.ini") -> None:
-    from .logging_setup import setup_logging
+    from .logging_setup import set_text_logging, setup_logging
 
     setup_logging("log")
 
@@ -143,6 +143,7 @@ def main(config_path: str = "config.ini") -> None:
     except ConfigError as e:
         logger.error("%s", e)
         sys.exit(1)
+    set_text_logging(config.log_read_text)
 
     try:
         engine = build_engine(config)
