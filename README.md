@@ -175,7 +175,7 @@ docker compose up -d
 - 読み上げた本文をログに記録するか (`LOG_READ_TEXT`、既定 False = 記録しない)
 - 使用量の保存先 (`USAGE_DIR`、既定 `usage`)
 - サーバーごとの辞書の登録数の上限 (`MAX_DICT_ENTRIES`、既定 0 = 無制限)
-- 使える話者 (`SPEAKER_ALLOWLIST`、`y.voice list` の名前をカンマ区切り。既定は空 = すべての話者)
+- 使える話者 (`SPEAKER_ALLOWLIST`、`y.voice list` の名前をカンマ（`,` `、` `，`）区切り。既定は空 = すべての話者)
 - 利用を断るサーバーの一覧ファイル (`BLOCKED_GUILDS_FILE`、既定 `settings/blocked_guilds.txt`。1行に1つサーバー ID)
 
 Bot を公開して多くのサーバーで使ってもらう場合の推奨設定・ブラックリストの使い方・使用量の確認方法は [公開版（ホスティング）の運用 (docs/hosting.md)](./docs/hosting.md) を参照してください。

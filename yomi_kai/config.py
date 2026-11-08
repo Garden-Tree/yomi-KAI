@@ -13,6 +13,7 @@ BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blo
 from __future__ import annotations
 
 import configparser
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +58,11 @@ class Config:
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
             f"blocked_guilds_file={self.blocked_guilds_file!r})"
         )
+
+
+def split_names(raw: str) -> list[str]:
+    """カンマ区切りの名前を分ける（半角「,」・読点「、」・全角「，」のいずれでも区切る）。前後の空白は除く。"""
+    return [name.strip() for name in re.split("[,、，]", raw) if name.strip()]
 
 
 def _required(section: configparser.SectionProxy, key: str) -> str:
@@ -156,7 +162,7 @@ def load_config(path: str | Path = "config.ini") -> Config:
                 f"config.ini の `MAX_DICT_ENTRIES` は 0 以上で指定してください（現在値: {dict_raw!r}）。"
             )
         speaker_allowlist = tuple(
-            dict.fromkeys(name.strip() for name in (section.get("SPEAKER_ALLOWLIST") or "").split(",") if name.strip())
+            dict.fromkeys(name.strip() for name in split_names(section.get("SPEAKER_ALLOWLIST") or "") if name.strip())
         )
         blocked_guilds_file = (section.get("BLOCKED_GUILDS_FILE") or "").strip() or "settings/blocked_guilds.txt"
     except configparser.Error as e:
