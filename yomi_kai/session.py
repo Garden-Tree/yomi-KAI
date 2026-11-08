@@ -21,6 +21,7 @@ import io
 import logging
 import os
 import shutil
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -63,6 +64,30 @@ class MessageableLike(Protocol):
 
 
 SourceFactory = Callable[[bytes], Any]
+
+
+class SynthesisStats:
+    """音声合成の成否の記録（全サーバー共通。y.status で表示する）。時刻は UNIX 時刻。"""
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self._clock = clock
+        self.last_success: float | None = None
+        self.last_error: float | None = None
+        self.errors = 0
+
+    def success(self) -> None:
+        self.last_success = self._clock()
+
+    def failure(self) -> None:
+        self.last_error = self._clock()
+        self.errors += 1
+
+    @property
+    def healthy(self) -> bool:
+        """失敗したことがない、または最後の失敗のあとに成功していれば True。"""
+        if self.last_error is None:
+            return True
+        return self.last_success is not None and self.last_success >= self.last_error
 
 
 def find_ffmpeg() -> str:
@@ -120,8 +145,10 @@ class GuildSession:
         afk_time: float,
         source_factory: SourceFactory,
         prefetch_chunks: int = PREFETCH_CHUNKS,
+        stats: SynthesisStats | None = None,
     ) -> None:
         self.guild_id = guild_id
+        self.stats = stats
         self.engine = engine
         self.afk_time = afk_time
         self.prefetch_chunks = prefetch_chunks
@@ -310,6 +337,11 @@ class GuildSession:
                 if not self._is_live(message) or job.task.cancelled():
                     continue
                 error = job.task.exception()
+                if self.stats is not None:
+                    if error is None:
+                        self.stats.success()
+                    else:
+                        self.stats.failure()
                 if error is not None:
                     logger.error("音声合成に失敗しました (guild=%s)", self.guild_id, exc_info=error)
                     if not message.failure_notified:  # 1メッセージにつき1回だけ通知する

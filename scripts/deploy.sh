@@ -65,7 +65,10 @@ main() {
     # ビルドに失敗した場合は、コンテナは入れ替わらず旧版のまま動き続ける
     local started
     started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    if ! docker compose up -d --build; then
+    # y.status に表示するバージョンとして、git の短いハッシュをイメージに埋め込む
+    local version
+    version="$(git rev-parse --short HEAD)"
+    if ! docker compose build --build-arg GIT_SHA="$version" || ! docker compose up -d; then
         log "ビルドまたは起動に失敗しました。旧版のコンテナはそのまま動いています"
         git reset --hard --quiet "$prev_commit"
         return 1

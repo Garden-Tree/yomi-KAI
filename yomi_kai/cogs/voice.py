@@ -17,8 +17,9 @@ from discord.ext import commands
 from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
-from ..session import AFK_NOTICE, GuildSession, SourceFactory
+from ..session import AFK_NOTICE, GuildSession, SourceFactory, SynthesisStats
 from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker, should_read_author
+from ..status import bot_version, status_fields
 from ..text import (
     announce_text,
     autojoin_allowed,
@@ -70,6 +71,8 @@ class VoiceCog(commands.Cog):
         self._auto_disconnected_at: dict[int, float] = {}
         # 自動接続の途中のサーバー（同時に複数人が入っても1回だけ接続する）
         self._autojoining: set[int] = set()
+        # 音声合成の成否（全サーバー共通、y.status で表示）
+        self.stats = SynthesisStats()
 
     def get_session(self, guild_id: int) -> GuildSession:
         session = self.sessions.get(guild_id)
@@ -79,6 +82,7 @@ class VoiceCog(commands.Cog):
                 self.engine,
                 afk_time=self.config.afk_time,
                 source_factory=self.source_factory,
+                stats=self.stats,
             )
             session.on_auto_close = lambda: self._note_auto_disconnect(guild_id)
             self.sessions[guild_id] = session
@@ -201,6 +205,26 @@ class VoiceCog(commands.Cog):
 
         # 辞書を先読みしておき、読み上げ時にファイルI/Oが発生しないようにする
         await self.store.aget(ctx.guild.id)
+
+    @commands.hybrid_command(name="status", description="Bot の動作状況を表示します", ignore_extra=False)
+    async def status(self, ctx: commands.Context) -> None:
+        session = self.sessions.get(ctx.guild.id) if ctx.guild is not None else None
+        started_at = getattr(self.bot, "started_at", None)
+        fields = status_fields(
+            latency=self.bot.latency,
+            sessions=sum(1 for s in self.sessions.values() if s.is_connected),
+            queue=None if ctx.guild is None else (session.pending if session is not None else 0),
+            workers=self.config.voicevox_workers,
+            healthy=self.stats.healthy,
+            last_error=self.stats.last_error,
+            errors=self.stats.errors,
+            uptime=None if started_at is None else time.time() - started_at,
+            version=bot_version(),
+        )
+        embed = discord.Embed(title="yomi-KAI の状態", color=EMBED_COLOR)
+        for name, value in fields:
+            embed.add_field(name=name, value=value, inline=False)
+        await reply(ctx, embed=embed)
 
     @commands.hybrid_command(name="dc", description="ボイスチャンネルから切断します")
     @commands.guild_only()

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import sys
+import time
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -82,6 +83,8 @@ class YomiBot(commands.Bot):
         self.engine = engine
         self.store = store
         self.settings = settings
+        # 起動した時刻（y.status の稼働時間）
+        self.started_at = time.time()
         # 使用量の計測（常に有効。本文は保存しない）
         self.usage = usage if usage is not None else UsageStore(config.usage_dir)
         self._heartbeat_task: asyncio.Task[None] | None = None

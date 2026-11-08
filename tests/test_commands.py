@@ -18,7 +18,7 @@ from yomi_kai.tts import Speaker
 
 GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
 GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots"}
-TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit"}
+TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit", "status"}
 # 「サーバー管理」の権限が必要なコマンド
 ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots", "dict import"}
 # サブコマンド（プレフィックスでの名前）
