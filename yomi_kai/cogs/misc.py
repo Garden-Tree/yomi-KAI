@@ -1,18 +1,18 @@
-"""「突然の死」コマンド（sd）。"""
+"""「突然の死」コマンド（sd）。``y.sd`` と ``/sd`` のどちらでも使える。"""
 
 from __future__ import annotations
 
 import logging
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
 from ..text import gen_sd_text
+from .common import EMBED_COLOR, reply
 
 logger = logging.getLogger(__name__)
-
-EMBED_COLOR = 0x3399CC
 
 
 class MiscCog(commands.Cog):
@@ -20,13 +20,22 @@ class MiscCog(commands.Cog):
         self.bot = bot
         self.config = config
 
-    @commands.command(name="sd")
-    async def sudden_death(self, ctx: commands.Context, *args: str) -> None:
+    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        # 引数が多すぎる（例: y.sd a b）
+        if isinstance(error, commands.UserInputError):
+            await self._invalid(ctx)
+
+    async def _invalid(self, ctx: commands.Context) -> None:
+        await reply(ctx, f"コマンドが間違っています。`{self.config.prefix}sd help`を参照してください", private=True)
+
+    @commands.hybrid_command(name="sd", description="「突然の死」風のテキストを出力します", ignore_extra=False)
+    @app_commands.describe(word="囲む言葉（省略すると既定のメッセージ、help でヘルプを表示）")
+    async def sudden_death(self, ctx: commands.Context, word: str | None = None) -> None:
         prefix = self.config.prefix
-        if len(args) == 0:
-            await ctx.channel.send(gen_sd_text(self.config.sd_msg))
+        if word is None:
+            await reply(ctx, gen_sd_text(self.config.sd_msg))
             return
-        if args[0] == "help" and len(args) == 1:
+        if word == "help":
             embed = discord.Embed(title="「突然の死」機能ヘルプ", color=EMBED_COLOR)
             embed.add_field(
                 name=f"{prefix}sd", value=f"{gen_sd_text(self.config.sd_msg)}\nと出力します。", inline=False
@@ -37,10 +46,7 @@ class MiscCog(commands.Cog):
                 inline=False,
             )
             embed.add_field(name=f"{prefix}sd help", value="このヘルプを表示します。", inline=False)
-            await ctx.send(embed=embed)
+            await reply(ctx, embed=embed)
             logger.info("sd helpを表示")
             return
-        if len(args) == 1:
-            await ctx.channel.send(gen_sd_text(args[0]))
-            return
-        await ctx.channel.send(f"コマンドが間違っています。`{prefix}sd help`を参照してください")
+        await reply(ctx, gen_sd_text(word))

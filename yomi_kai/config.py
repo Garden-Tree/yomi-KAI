@@ -2,7 +2,9 @@
 
 キーは従来どおり ``[DEFAULT]`` セクションの
 DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
-任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）と MAX_READ_LENGTH（既定 100、0 で無制限）を追加している。
+任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
+ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
+VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）を追加している。
 """
 
 from __future__ import annotations
@@ -28,6 +30,17 @@ class Config:
     google_api_key: str | None = None
     voicevox_load_all_models: bool = False
     max_read_length: int = 100
+    alert_webhook_url: str | None = None
+    alert_after: int = 300
+    voicevox_workers: int = 1
+
+    def __repr__(self) -> str:
+        # トークン・APIキー・Webhook の URL がログ等に出ないようにする
+        return (
+            f"Config(prefix={self.prefix!r}, afk_time={self.afk_time}, use_google_tts={self.use_google_tts}, "
+            f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
+            f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers})"
+        )
 
 
 def _required(section: configparser.SectionProxy, key: str) -> str:
@@ -87,6 +100,32 @@ def load_config(path: str | Path = "config.ini") -> Config:
             ) from None
         if max_read_length < 0:
             raise ConfigError(f"config.ini の `MAX_READ_LENGTH` は 0 以上で指定してください（現在値: {max_raw!r}）。")
+        alert_webhook_url = (section.get("ALERT_WEBHOOK_URL") or "").strip() or None
+        if alert_webhook_url is not None and not alert_webhook_url.startswith("https://"):
+            # 値そのものは秘密情報なので表示しない
+            raise ConfigError(
+                "config.ini の `ALERT_WEBHOOK_URL` は https:// で始まる Webhook の URL を指定してください。"
+            )
+        alert_raw = (section.get("ALERT_AFTER") or "").strip() or "300"
+        try:
+            alert_after = int(alert_raw)
+        except ValueError:
+            raise ConfigError(
+                f"config.ini の `ALERT_AFTER` は秒数（整数）で指定してください（現在値: {alert_raw!r}）。"
+            ) from None
+        workers_raw = (section.get("VOICEVOX_WORKERS") or "").strip() or "1"
+        try:
+            voicevox_workers = int(workers_raw)
+        except ValueError:
+            raise ConfigError(
+                f"config.ini の `VOICEVOX_WORKERS` は整数で指定してください（1〜8、現在値: {workers_raw!r}）。"
+            ) from None
+        if not 1 <= voicevox_workers <= 8:
+            raise ConfigError(
+                f"config.ini の `VOICEVOX_WORKERS` は 1〜8 で指定してください（現在値: {workers_raw!r}）。"
+            )
+        if alert_after < 30:
+            raise ConfigError(f"config.ini の `ALERT_AFTER` は 30 以上で指定してください（現在値: {alert_raw!r}）。")
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
         raise ConfigError(f"config.ini の読み込みに失敗しました: {e}") from None
@@ -100,4 +139,7 @@ def load_config(path: str | Path = "config.ini") -> Config:
         google_api_key=google_api_key,
         voicevox_load_all_models=load_all,
         max_read_length=max_read_length,
+        alert_webhook_url=alert_webhook_url,
+        alert_after=alert_after,
+        voicevox_workers=voicevox_workers,
     )

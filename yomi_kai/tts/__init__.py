@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import unicodedata
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -21,6 +22,32 @@ class Speaker:
 
     name: str
     description: str
+
+
+def _normalize(name: str) -> str:
+    # 全角・半角や大文字・小文字の違いを無視する（「（」と「(」、「Ａ」と「a」など）
+    return unicodedata.normalize("NFKC", name).casefold().strip()
+
+
+def find_speakers(query: str, names: Iterable[str]) -> list[str]:
+    """話者名を検索する。要素が1つなら一意に決まった、2つ以上なら曖昧、空なら該当なし。
+
+    完全一致 → 前方一致 → 部分一致の順に探し、最初に見つかった段階の候補を（元の順序で）返す。
+    """
+    names = list(names)
+    key = _normalize(query)
+    if not key:
+        return []
+    normalized = [(name, _normalize(name)) for name in names]
+    for matches in (
+        lambda n: n == key,
+        lambda n: n.startswith(key),
+        lambda n: key in n,
+    ):
+        found = [name for name, n in normalized if matches(n)]
+        if found:
+            return found
+    return []
 
 
 @runtime_checkable
