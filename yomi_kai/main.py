@@ -205,7 +205,7 @@ class YomiBot(commands.Bot):
         )
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))
-        await self.add_cog(MiscCog(self, self.config))
+        await self.add_cog(MiscCog(self, self.config, self.engine))
         await self.sync_app_commands()
 
     async def sync_app_commands(self) -> None:

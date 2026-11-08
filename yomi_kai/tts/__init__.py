@@ -18,10 +18,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Speaker:
-    """話者。``name`` がドロップダウンのラベル兼 ID になる。"""
+    """話者。``name`` がドロップダウンのラベル兼 ID になる。
+
+    ``credit`` は利用規約で求められるクレジット表記（VOICEVOX の話者なら ``VOICEVOX:ずんだもん`` のように
+    スタイル名を含まないキャラクター名）。不要なエンジン（Google など）は None。
+    """
 
     name: str
     description: str
+    credit: str | None = None
 
 
 def _normalize(name: str) -> str:

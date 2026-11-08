@@ -125,6 +125,11 @@ class VoiceCog(commands.Cog):
             value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
             inline=False,
         )
+        help_embed.add_field(
+            name=f"{prefix}credit",
+            value="読み上げ音声のクレジット（VOICEVOX:ずんだもん など）を表示します。",
+            inline=False,
+        )
         help_embed.add_field(name=f"{prefix}help", value="このヘルプを表示します。", inline=False)
         help_embed.set_footer(text="どのコマンドもスラッシュコマンド（/c、/voice など）として使うこともできます。")
         await reply(ctx, embed=help_embed)
