@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 
 from .blocklist import CHECK_INTERVAL, GuildBlocklist
+from .cogs.common import original_error
 from .config import Config, ConfigError, load_config
 from .dictionary import DictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
@@ -183,6 +184,7 @@ class YomiBot(commands.Bot):
         await asyncio.to_thread(self.blocklist.reload_if_changed)
         self._blocklist_task = asyncio.create_task(self._watch_blocklist(), name="yomi-kai-blocklist")
 
+        from .cogs.admin import AdminCog
         from .cogs.dictionary import DictionaryCog
         from .cogs.misc import MiscCog
         from .cogs.settings import SettingsCog
@@ -206,6 +208,7 @@ class YomiBot(commands.Bot):
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))
         await self.add_cog(MiscCog(self, self.config, self.engine))
+        await self.add_cog(AdminCog(self, self.config, self.settings))
         await self.sync_app_commands()
 
     async def sync_app_commands(self) -> None:
@@ -238,6 +241,10 @@ class YomiBot(commands.Bot):
             return
         if isinstance(error, commands.NoPrivateMessage):
             await ctx.send("このコマンドはサーバー内でのみ使用できます")
+            return
+        if isinstance(original_error(error), commands.CheckFailure):
+            # 権限不足などは各 Cog の cog_command_error が案内を返す
+            logger.info("コマンドの実行条件を満たしていません: %s", original_error(error))
             return
         logger.error("コマンド処理中にエラーが発生しました", exc_info=error)
 

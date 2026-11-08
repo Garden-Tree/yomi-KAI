@@ -6,6 +6,8 @@
       "speaker": "サーバーの話者（未設定なら省略）",
       "announce_voice": true,
       "read_name": false,
+      "ignored_users": ["<user_id>"],
+      "ignored_roles": ["<role_id>"],
       "users": {
         "<user_id>": {"speaker": "個人の話者", "speed": 1.2}
       }
@@ -23,7 +25,7 @@ import asyncio
 import logging
 import math
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,10 @@ from typing import Any
 from .jsonfile import read_json_object, write_json_atomic
 
 logger = logging.getLogger(__name__)
+
+# 読み上げないユーザー・ロールの登録数の上限（それぞれ）
+MAX_IGNORED = 25
+IGNORED_KEYS = ("ignored_users", "ignored_roles")
 
 SPEED_MIN = 0.5
 SPEED_MAX = 2.0
@@ -51,6 +57,9 @@ class GuildSettings:
     announce_voice: bool = True
     # 発言者の名前を本文の前に読み上げるか（未設定なら読み上げない）
     read_name: bool = False
+    # 読み上げないユーザー・ロールの ID
+    ignored_users: frozenset[int] = frozenset()
+    ignored_roles: frozenset[int] = frozenset()
 
     def user(self, user_id: int) -> UserSettings:
         return self.users.get(user_id) or UserSettings()
@@ -63,6 +72,8 @@ class GuildSettings:
             raise ValueError("speaker は文字列で指定してください")
         announce_voice = _flag(data, "announce_voice", True)
         read_name = _flag(data, "read_name", False)
+        ignored_users = frozenset(_id_list(data, "ignored_users"))
+        ignored_roles = frozenset(_id_list(data, "ignored_roles"))
         raw_users = data.get("users", {})
         if not isinstance(raw_users, dict):
             raise ValueError("users はオブジェクトで指定してください")
@@ -81,7 +92,39 @@ class GuildSettings:
             if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))):
                 raise ValueError(f"users[{key!r}].speed は数値で指定してください")
             users[user_id] = UserSettings(user_speaker, None if speed is None else float(speed))
-        return cls(speaker=speaker, users=users, announce_voice=announce_voice, read_name=read_name)
+        return cls(
+            speaker=speaker,
+            users=users,
+            announce_voice=announce_voice,
+            read_name=read_name,
+            ignored_users=ignored_users,
+            ignored_roles=ignored_roles,
+        )
+
+
+def _snowflake(value: Any, where: str) -> int:
+    """ID（数字の文字列または整数）を int にする。"""
+    if isinstance(value, bool):
+        raise ValueError(f"{where} は ID で指定してください")
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value)
+    raise ValueError(f"{where} は ID で指定してください")
+
+
+def _id_list(data: Mapping[str, Any], key: str) -> list[int]:
+    raw = data.get(key, [])
+    if not isinstance(raw, list):
+        raise ValueError(f"{key} は配列で指定してください")
+    return [_snowflake(v, f"{key}[{i}]") for i, v in enumerate(raw)]
+
+
+def is_ignored(settings: GuildSettings, user_id: int, role_ids: Iterable[int]) -> bool:
+    """読み上げないユーザー、または読み上げないロールを持つメンバーなら True。"""
+    if user_id in settings.ignored_users:
+        return True
+    return not settings.ignored_roles.isdisjoint(role_ids)
 
 
 def _flag(data: Mapping[str, Any], key: str, default: bool) -> bool:
@@ -213,6 +256,45 @@ class SettingsStore:
 
     def set_read_name(self, guild_id: int, enabled: bool) -> None:
         self.set_flag(guild_id, "read_name", enabled)
+
+    def add_ignored(self, guild_id: int, key: str, target_id: int, limit: int = MAX_IGNORED) -> str:
+        """読み上げないユーザー・ロールを登録する。"added" / "exists"（登録済み）/ "full"（上限）を返す。"""
+        if key not in IGNORED_KEYS:
+            raise ValueError(f"unknown key: {key}")
+        result = "added"
+
+        def mutate(raw: dict[str, Any]) -> bool:
+            nonlocal result
+            ids = _id_list(raw, key)
+            if target_id in ids:
+                result = "exists"
+                return False
+            if len(ids) >= limit:
+                result = "full"
+                return False
+            raw[key] = [str(i) for i in [*ids, target_id]]
+            return True
+
+        self._update(guild_id, mutate)
+        return result
+
+    def remove_ignored(self, guild_id: int, key: str, target_id: int) -> bool:
+        """読み上げないユーザー・ロールの登録を外す。登録されていなければ False。"""
+        if key not in IGNORED_KEYS:
+            raise ValueError(f"unknown key: {key}")
+
+        def mutate(raw: dict[str, Any]) -> bool:
+            ids = _id_list(raw, key)
+            if target_id not in ids:
+                return False
+            remaining = [str(i) for i in ids if i != target_id]
+            if remaining:
+                raw[key] = remaining
+            else:
+                del raw[key]
+            return True
+
+        return self._update(guild_id, mutate)
 
     def _set_user_field(self, guild_id: int, user_id: int, key: str, value: Any) -> None:
         def mutate(raw: dict[str, Any]) -> bool:

@@ -16,10 +16,12 @@ from yomi_kai.main import YomiBot
 from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
-GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict", "readname"}
+GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict", "readname", "ignore"}
 TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit"}
+# 「サーバー管理」の権限が必要なコマンド
+ADMIN_ONLY = {"ignore add", "ignore del"}
 # サブコマンド（プレフィックスでの名前）
-SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help"}
+SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help", "ignore add", "ignore del", "ignore list"}
 
 
 class StubEngine:
@@ -171,3 +173,12 @@ def test_credit_follows_allowlist():
     assert [line for line in credit_lines(engine.speakers(), False) if line.startswith("VOICEVOX:")] == [
         "VOICEVOX:四国めたん"
     ]
+
+
+def test_admin_commands_require_manage_guild(setup_result):
+    prefix = setup_result["prefix"]
+    for name in ADMIN_ONLY:
+        predicates = [c.__qualname__ for c in prefix[name].checks]
+        assert any("has_guild_permissions" in q for q in predicates), name
+    target = {p.name: p for p in setup_result["app"]["ignore"].get_command("add").parameters}["target"]
+    assert target.type is discord.AppCommandOptionType.mentionable

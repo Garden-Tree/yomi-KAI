@@ -18,7 +18,7 @@ from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
-from ..settings import SettingsStore, resolve_voice, server_speaker
+from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker
 from ..text import (
     announce_text,
     build_read_text,
@@ -279,6 +279,10 @@ class VoiceCog(commands.Cog):
             return
 
         settings = await self.settings.aget(guild.id)
+        # 読み上げないユーザー・ロール（y.ignore）
+        roles = getattr(message.author, "roles", None) or ()
+        if is_ignored(settings, message.author.id, (r.id for r in roles)):
+            return
         speaker, speed = resolve_voice(
             settings, message.author.id, self.available_speakers, self.engine.default_speaker
         )
