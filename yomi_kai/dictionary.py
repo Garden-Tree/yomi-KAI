@@ -71,14 +71,22 @@ class DictionaryStore:
         """一時ファイルに書いてから os.replace で差し替える（書き込み途中で壊れない）。"""
         write_json_atomic(self.path_for(guild_id), words)
 
-    def add(self, guild_id: int, word: str, reading: str) -> None:
+    def add(self, guild_id: int, word: str, reading: str, *, max_entries: int = 0) -> bool:
+        """単語を登録する（登録済みなら読みを更新する）。
+
+        ``max_entries`` が 1 以上で、未登録の単語を追加すると件数がそれを超える場合は何もせず False を返す
+        （登録済みの単語の読みの更新はいつでもできる）。0 なら無制限。
+        """
         with self._lock:
             words = self._read_words(guild_id)
+            if max_entries > 0 and word not in words and len(words) >= max_entries:
+                return False
             words[word] = reading
             self._write_words(guild_id, words)
             # キャッシュを破棄せず差し替える。破棄すると次の発言でファイル読み込みの待ちが発生し、
             # その間に届いた発言と読み上げ順が入れ替わる可能性がある
             self._cache[guild_id] = compile_dictionary(words)
+            return True
 
     def remove(self, guild_id: int, word: str) -> bool:
         """単語を削除する。未登録なら False を返し、ファイルは変更しない。"""

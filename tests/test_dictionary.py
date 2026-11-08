@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -129,3 +130,52 @@ def test_aget_uses_cache(tmp_path):
     first, second = asyncio.run(run())
     assert first is second
     assert first.apply("a") == "あ"
+
+
+# --- 登録数の上限（MAX_DICT_ENTRIES） ---
+
+
+def test_add_respects_max_entries(tmp_path):
+    store = DictionaryStore(tmp_path / "dict")
+    assert store.add(GUILD, "a", "えー", max_entries=2)
+    assert store.add(GUILD, "b", "びー", max_entries=2)
+    assert not store.add(GUILD, "c", "しー", max_entries=2)  # 新しい単語は追加しない
+    assert store.add(GUILD, "a", "あ", max_entries=2)  # 登録済みの単語の更新はできる
+    assert read_json(store.path_for(GUILD)) == {"a": "あ", "b": "びー"}
+    assert store.get(GUILD).words == {"a": "あ", "b": "びー"}
+    assert store.add(GUILD, "c", "しー")  # 0（既定）は無制限
+
+
+class FakeCtx:
+    def __init__(self, slash):
+        self.interaction = object() if slash else None
+        self.guild = SimpleNamespace(id=GUILD)
+        self.sent = []
+
+    async def send(self, content=None, **kwargs):
+        self.sent.append((content, kwargs))
+
+
+@pytest.mark.parametrize("slash", [False, True])
+def test_dict_add_command_refuses_when_full(tmp_path, slash):
+    from yomi_kai.cogs.dictionary import DictionaryCog
+    from yomi_kai.config import Config
+
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", max_dict_entries=1)
+    store = DictionaryStore(tmp_path / "dict")
+    cog = DictionaryCog(SimpleNamespace(), config, store)
+
+    async def run():
+        first, second, update = FakeCtx(slash), FakeCtx(slash), FakeCtx(slash)
+        await DictionaryCog.dict_add.callback(cog, first, "a", "えー")
+        await DictionaryCog.dict_add.callback(cog, second, "b", "びー")
+        await DictionaryCog.dict_add.callback(cog, update, "a", "あ")
+        return first, second, update
+
+    first, second, update = asyncio.run(run())
+    assert "embed" in first.sent[0][1]
+    assert second.sent == [
+        ("辞書の登録数が上限（1件）に達しています。不要な単語を削除してください", {"ephemeral": slash})
+    ]
+    assert "embed" in update.sent[0][1]
+    assert store.words(GUILD) == {"a": "あ"}

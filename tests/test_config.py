@@ -66,3 +66,11 @@ def test_log_read_text(tmp_path):
 def test_invalid_voicevox_workers(tmp_path, value):
     with pytest.raises(ConfigError, match="VOICEVOX_WORKERS"):
         load(tmp_path, f"VOICEVOX_WORKERS = {value}\n")
+
+
+def test_max_dict_entries(tmp_path):
+    assert load(tmp_path).max_dict_entries == 0
+    assert load(tmp_path, "MAX_DICT_ENTRIES = 50\n").max_dict_entries == 50
+    for value in ("-1", "many"):
+        with pytest.raises(ConfigError, match="MAX_DICT_ENTRIES"):
+            load(tmp_path, f"MAX_DICT_ENTRIES = {value}\n")

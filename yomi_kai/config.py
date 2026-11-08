@@ -38,6 +38,8 @@ class Config:
     log_read_text: bool = False
     # 月ごとの使用量（文字数・メッセージ数）の保存先
     usage_dir: str = "usage"
+    # サーバーごとの辞書の登録数の上限（0 で無制限）
+    max_dict_entries: int = 0
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
@@ -45,7 +47,8 @@ class Config:
             f"Config(prefix={self.prefix!r}, afk_time={self.afk_time}, use_google_tts={self.use_google_tts}, "
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
             f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
-            f"log_read_text={self.log_read_text}, usage_dir={self.usage_dir!r})"
+            f"log_read_text={self.log_read_text}, usage_dir={self.usage_dir!r}, "
+            f"max_dict_entries={self.max_dict_entries})"
         )
 
 
@@ -134,6 +137,17 @@ def load_config(path: str | Path = "config.ini") -> Config:
             raise ConfigError(f"config.ini の `ALERT_AFTER` は 30 以上で指定してください（現在値: {alert_raw!r}）。")
         log_read_text = _boolean(section, "LOG_READ_TEXT", False)
         usage_dir = (section.get("USAGE_DIR") or "").strip() or "usage"
+        dict_raw = (section.get("MAX_DICT_ENTRIES") or "").strip() or "0"
+        try:
+            max_dict_entries = int(dict_raw)
+        except ValueError:
+            raise ConfigError(
+                f"config.ini の `MAX_DICT_ENTRIES` は整数で指定してください（0 で無制限、現在値: {dict_raw!r}）。"
+            ) from None
+        if max_dict_entries < 0:
+            raise ConfigError(
+                f"config.ini の `MAX_DICT_ENTRIES` は 0 以上で指定してください（現在値: {dict_raw!r}）。"
+            )
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
         raise ConfigError(f"config.ini の読み込みに失敗しました: {e}") from None
@@ -152,4 +166,5 @@ def load_config(path: str | Path = "config.ini") -> Config:
         voicevox_workers=voicevox_workers,
         log_read_text=log_read_text,
         usage_dir=usage_dir,
+        max_dict_entries=max_dict_entries,
     )
