@@ -303,6 +303,28 @@ def announce_text(kind: str, display_name: str) -> str:
     return f"{display_name}さんが{'入室' if kind == JOIN else '退室'}しました"
 
 
+# 同じ人が続けて発言した場合、この秒数以内なら名前を読み上げない
+NAME_SKIP_SECONDS = 30.0
+
+
+def should_read_name(
+    previous: tuple[int, float] | None, user_id: int, now: float, window: float = NAME_SKIP_SECONDS
+) -> bool:
+    """名前を読み上げるか。``previous`` はそのサーバーで直前に読み上げた発言の (ユーザーID, 時刻)。
+
+    同じ人の発言が ``window`` 秒以内に続いた場合は読み上げない（連投のたびに名前を読まない）。
+    """
+    if previous is None:
+        return True
+    last_user, last_time = previous
+    return last_user != user_id or now - last_time > window
+
+
+def with_name(text: str, name: str) -> str:
+    """本文の前に「名前、」を付ける（切り詰めは本文だけに済ませてから呼ぶ）。"""
+    return f"{name}、{text}"
+
+
 def chunk_lines(lines: Sequence[str], limit: int = 1900) -> list[str]:
     """行を改行でつなぎ、1つあたり ``limit`` 文字以内のかたまりに分ける（Discord の2000文字制限対策）。
 

@@ -155,6 +155,26 @@ class SettingsCog(commands.Cog):
         await reply(ctx, f"入退室の読み上げを{'オン' if enabled else 'オフ'}にしました")
         logger.info("入退室の読み上げを%sにしました (guild=%s)", "オン" if enabled else "オフ", guild_id)
 
+    async def _toggle(self, ctx: commands.Context, state: str | None, key: str, label: str) -> None:
+        """サーバー全体のオン/オフの設定。state を省略すると現在の設定を表示する。"""
+        guild_id = ctx.guild.id
+        if state is None:
+            enabled = getattr(await self.settings.aget(guild_id), key)
+            await reply(ctx, f"{label}は現在{'オン' if enabled else 'オフ'}です")
+            return
+        enabled = state == "on"
+        await asyncio.to_thread(self.settings.set_flag, guild_id, key, enabled)
+        await reply(ctx, f"{label}を{'オン' if enabled else 'オフ'}にしました")
+        logger.info("%sを%sにしました (guild=%s)", label, "オン" if enabled else "オフ", guild_id)
+
+    @commands.hybrid_command(
+        name="readname", description="発言者の名前を読み上げるか設定します（サーバー全体）", ignore_extra=False
+    )
+    @commands.guild_only()
+    @app_commands.describe(state="on で名前を読み上げる、off で読み上げない（省略すると現在の設定を表示）")
+    async def readname(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._toggle(ctx, state, "read_name", "名前の読み上げ")
+
     @commands.hybrid_command(
         name="speed", description="自分の読み上げ速度を設定します（0.5〜2.0倍）", ignore_extra=False
     )

@@ -16,8 +16,10 @@ from yomi_kai.main import YomiBot
 from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
-TOP_LEVEL = {"help", "c", "dc", "s", "voice", "speed", "announce", "dict", "sd", "credit"}
-GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
+GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict", "readname"}
+TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit"}
+# サブコマンド（プレフィックスでの名前）
+SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help"}
 
 
 class StubEngine:
@@ -54,7 +56,7 @@ def setup_result(tmp_path_factory):
 
 def test_prefix_commands_are_hybrid(setup_result):
     prefix = setup_result["prefix"]
-    assert set(prefix) == TOP_LEVEL | {"dict add", "dict del", "dict list", "dict help"}
+    assert set(prefix) == TOP_LEVEL | SUBCOMMANDS
     for name, command in prefix.items():
         assert isinstance(command, (commands.HybridCommand, commands.HybridGroup)), name
 

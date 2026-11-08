@@ -5,6 +5,7 @@
     {
       "speaker": "サーバーの話者（未設定なら省略）",
       "announce_voice": true,
+      "read_name": false,
       "users": {
         "<user_id>": {"speaker": "個人の話者", "speed": 1.2}
       }
@@ -48,6 +49,8 @@ class GuildSettings:
     users: Mapping[int, UserSettings] = field(default_factory=dict)
     # ボイスチャンネルへの入退室を読み上げるか（未設定なら読み上げる）
     announce_voice: bool = True
+    # 発言者の名前を本文の前に読み上げるか（未設定なら読み上げない）
+    read_name: bool = False
 
     def user(self, user_id: int) -> UserSettings:
         return self.users.get(user_id) or UserSettings()
@@ -58,9 +61,8 @@ class GuildSettings:
         speaker = data.get("speaker")
         if speaker is not None and not isinstance(speaker, str):
             raise ValueError("speaker は文字列で指定してください")
-        announce_voice = data.get("announce_voice", True)
-        if not isinstance(announce_voice, bool):
-            raise ValueError("announce_voice は true / false で指定してください")
+        announce_voice = _flag(data, "announce_voice", True)
+        read_name = _flag(data, "read_name", False)
         raw_users = data.get("users", {})
         if not isinstance(raw_users, dict):
             raise ValueError("users はオブジェクトで指定してください")
@@ -79,7 +81,14 @@ class GuildSettings:
             if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))):
                 raise ValueError(f"users[{key!r}].speed は数値で指定してください")
             users[user_id] = UserSettings(user_speaker, None if speed is None else float(speed))
-        return cls(speaker, users, announce_voice)
+        return cls(speaker=speaker, users=users, announce_voice=announce_voice, read_name=read_name)
+
+
+def _flag(data: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} は true / false で指定してください")
+    return value
 
 
 EMPTY_SETTINGS = GuildSettings()
@@ -190,12 +199,20 @@ class SettingsStore:
 
         return self._update(guild_id, mutate)
 
-    def set_announce_voice(self, guild_id: int, enabled: bool) -> None:
+    def set_flag(self, guild_id: int, key: str, enabled: bool) -> None:
+        """サーバー全体のオン/オフの設定（announce_voice / read_name など）を保存する。"""
+
         def mutate(raw: dict[str, Any]) -> bool:
-            raw["announce_voice"] = bool(enabled)
+            raw[key] = bool(enabled)
             return True
 
         self._update(guild_id, mutate)
+
+    def set_announce_voice(self, guild_id: int, enabled: bool) -> None:
+        self.set_flag(guild_id, "announce_voice", enabled)
+
+    def set_read_name(self, guild_id: int, enabled: bool) -> None:
+        self.set_flag(guild_id, "read_name", enabled)
 
     def _set_user_field(self, guild_id: int, user_id: int, key: str, value: Any) -> None:
         def mutate(raw: dict[str, Any]) -> bool:

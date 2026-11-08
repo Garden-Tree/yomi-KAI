@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Literal
 
 import discord
@@ -18,7 +19,14 @@ from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
 from ..settings import SettingsStore, resolve_voice, server_speaker
-from ..text import announce_text, build_read_text, describe_attachments, voice_transition
+from ..text import (
+    announce_text,
+    build_read_text,
+    describe_attachments,
+    should_read_name,
+    voice_transition,
+    with_name,
+)
 from ..tts import TTSEngine
 from ..ui import DropdownView
 from ..usage import UsageStore
@@ -53,6 +61,9 @@ class VoiceCog(commands.Cog):
         self.source_factory = source_factory
         # guild.id -> GuildSession（サーバーごとの状態はここにだけ持つ）
         self.sessions: dict[int, GuildSession] = {}
+        # guild.id -> 直前に読み上げた発言の (ユーザーID, 時刻)。名前の読み上げを連投で省くために使う
+        self._last_reader: dict[int, tuple[int, float]] = {}
+        self._clock = time.monotonic
 
     def get_session(self, guild_id: int) -> GuildSession:
         session = self.sessions.get(guild_id)
@@ -271,7 +282,12 @@ class VoiceCog(commands.Cog):
         speaker, speed = resolve_voice(
             settings, message.author.id, self.available_speakers, self.engine.default_speaker
         )
+        now = self._clock()
+        # 名前は本文の切り詰め後に付ける（MAX_READ_LENGTH は本文だけに適用）
+        if settings.read_name and should_read_name(self._last_reader.get(guild.id), message.author.id, now):
+            read_msg = with_name(read_msg, message.author.display_name)
         if session.enqueue(read_msg, speaker, speed):
+            self._last_reader[guild.id] = (message.author.id, now)
             if self.usage is not None:
                 self.usage.record(guild.id, message.author.id, len(read_msg))
             logger.info(
