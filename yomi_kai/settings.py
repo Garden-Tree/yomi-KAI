@@ -6,6 +6,7 @@
       "speaker": "サーバーの話者（未設定なら省略）",
       "announce_voice": true,
       "read_name": false,
+      "queue_speedup": true,
       "ignored_users": ["<user_id>"],
       "ignored_roles": ["<role_id>"],
       "autojoin": {"<voice_channel_id>": "<text_channel_id>"},
@@ -60,6 +61,8 @@ class GuildSettings:
     announce_voice: bool = True
     # 発言者の名前を本文の前に読み上げるか（未設定なら読み上げない）
     read_name: bool = False
+    # 読み上げ待ちが溜まったら速く読むか（未設定なら速く読む）
+    queue_speedup: bool = True
     # 読み上げないユーザー・ロールの ID
     ignored_users: frozenset[int] = frozenset()
     ignored_roles: frozenset[int] = frozenset()
@@ -77,6 +80,7 @@ class GuildSettings:
             raise ValueError("speaker は文字列で指定してください")
         announce_voice = _flag(data, "announce_voice", True)
         read_name = _flag(data, "read_name", False)
+        queue_speedup = _flag(data, "queue_speedup", True)
         ignored_users = frozenset(_id_list(data, "ignored_users"))
         ignored_roles = frozenset(_id_list(data, "ignored_roles"))
         autojoin = _id_map(data, "autojoin")
@@ -103,6 +107,7 @@ class GuildSettings:
             users=users,
             announce_voice=announce_voice,
             read_name=read_name,
+            queue_speedup=queue_speedup,
             ignored_users=ignored_users,
             ignored_roles=ignored_roles,
             autojoin=autojoin,

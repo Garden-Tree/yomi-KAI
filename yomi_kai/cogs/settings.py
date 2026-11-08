@@ -176,6 +176,16 @@ class SettingsCog(commands.Cog):
         await self._toggle(ctx, state, "read_name", "名前の読み上げ")
 
     @commands.hybrid_command(
+        name="speedup",
+        description="読み上げ待ちが溜まったときに速く読むか設定します（サーバー全体）",
+        ignore_extra=False,
+    )
+    @commands.guild_only()
+    @app_commands.describe(state="on で混雑時に速く読む、off で常に設定どおりの速度（省略すると現在の設定を表示）")
+    async def speedup(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._toggle(ctx, state, "queue_speedup", "混雑時の早読み")
+
+    @commands.hybrid_command(
         name="speed", description="自分の読み上げ速度を設定します（0.5〜2.0倍）", ignore_extra=False
     )
     @commands.guild_only()

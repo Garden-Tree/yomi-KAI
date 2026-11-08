@@ -8,6 +8,9 @@
 すぐに再生を始められる）。ワーカーは、再生前のかたまりが最大 ``PREFETCH_CHUNKS`` 個になるよう、メッセージを
 またいで次のかたまりの合成を並行に始め（``asyncio.to_thread``）、かたまりを必ずキュー投入順に1つずつ再生する。
 スキップはメッセージ単位（残りのかたまりもまとめて飛ばす）。
+
+混雑時の早読み: ``enqueue(..., speedup=True)`` で積んだメッセージは、合成を始める時点で、合成を始めていない
+メッセージ（そのメッセージ自身を含む）が3件以上なら1.25倍、6件以上なら1.5倍の速度にする（上限2.0倍）。
 """
 
 from __future__ import annotations
@@ -32,6 +35,20 @@ AFK_NOTICE = "自動切断しました"
 SYNTH_FAILED_NOTICE = "読み上げに失敗しました"
 # 1サーバーあたり、再生前に先行して合成しておくかたまりの最大数（= 同時に合成する最大数）
 PREFETCH_CHUNKS = 3
+# 混雑時の早読み: (合成を始めていないメッセージの数, 速度の倍率) を多い順に
+BACKLOG_STEPS = ((6, 1.5), (3, 1.25))
+BACKLOG_MAX_SPEED = 2.0
+
+
+def backlog_speed(speed: float, pending: int) -> float:
+    """混雑しているほど速く読む。``pending`` は合成を始めていないメッセージの数（これから読むものを含む）。
+
+    倍率を掛けた結果は 2.0 倍で頭打ちにする（元の速度より遅くはしない）。
+    """
+    for threshold, multiplier in BACKLOG_STEPS:
+        if pending >= threshold:
+            return max(speed, min(BACKLOG_MAX_SPEED, speed * multiplier))
+    return speed
 
 
 class VoiceClientLike(Protocol):
@@ -74,6 +91,7 @@ class _Message:
     speaker: str
     speed: float
     epoch: int
+    speedup: bool = False  # 混雑時の早読みの対象か
     next_chunk: int = 0  # 次に合成を始めるかたまりの位置
     skipped: bool = False
     failure_notified: bool = False
@@ -194,12 +212,15 @@ class GuildSession:
                     logger.exception("切断通知の送信に失敗しました (guild=%s)", self.guild_id)
 
     # --- 読み上げ ---
-    def enqueue(self, text: str, speaker: str, speed: float = 1.0) -> bool:
-        """読み上げキューに追加する（合成用のかたまりに分ける）。未接続なら何もせず False。AFKタイマーを張り直す。"""
+    def enqueue(self, text: str, speaker: str, speed: float = 1.0, *, speedup: bool = False) -> bool:
+        """読み上げキューに追加する（合成用のかたまりに分ける）。未接続なら何もせず False。AFKタイマーを張り直す。
+
+        ``speedup=True`` なら混雑時の早読み（``backlog_speed``）の対象にする。
+        """
         if not self.is_connected:
             return False
         chunks = split_for_synthesis(text) or [text]
-        self._messages.append(_Message(chunks, speaker, speed, self._epoch))
+        self._messages.append(_Message(chunks, speaker, speed, self._epoch, speedup))
         self._wakeup.set()
         self._reset_afk_timer()
         return True
@@ -258,6 +279,9 @@ class GuildSession:
             if not self._is_live(message) or message.next_chunk >= len(message.chunks):
                 self._messages.popleft()
                 continue
+            if message.next_chunk == 0 and message.speedup:
+                # 速度はメッセージの読み始めに決め、残りのかたまりも同じ速度で読む
+                message.speed = backlog_speed(message.speed, len(self._messages))
             text = message.chunks[message.next_chunk]
             message.next_chunk += 1
             task = asyncio.create_task(self._synthesize(text, message.speaker, message.speed))

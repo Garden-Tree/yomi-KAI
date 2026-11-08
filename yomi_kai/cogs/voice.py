@@ -300,7 +300,7 @@ class VoiceCog(commands.Cog):
         # 名前は本文の切り詰め後に付ける（MAX_READ_LENGTH は本文だけに適用）
         if settings.read_name and should_read_name(self._last_reader.get(guild.id), message.author.id, now):
             read_msg = with_name(read_msg, message.author.display_name)
-        if session.enqueue(read_msg, speaker, speed):
+        if session.enqueue(read_msg, speaker, speed, speedup=settings.queue_speedup):
             self._last_reader[guild.id] = (message.author.id, now)
             if self.usage is not None:
                 self.usage.record(guild.id, message.author.id, len(read_msg))
@@ -419,7 +419,7 @@ class VoiceCog(commands.Cog):
             return
         text = announce_text(kind, member.display_name)
         speaker = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
-        if session.enqueue(text, speaker, 1.0):
+        if session.enqueue(text, speaker, 1.0, speedup=settings.queue_speedup):
             if self.usage is not None:
                 # 入退室はユーザーの使用量ではなく、サーバーの system_chars に数える
                 self.usage.record_system(member.guild.id, len(text))
