@@ -141,10 +141,29 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(
+            name=f"{prefix}readname `on|off` / {prefix}speedup `on|off`",
+            value=(
+                "発言者の名前を読み上げるか（連投では省略）／読み上げ待ちが溜まったら速く読むかを設定します"
+                "（サーバー全体）。"
+            ),
+            inline=False,
+        )
+        help_embed.add_field(
             name=f"{prefix}dict",
             value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。",
             inline=False,
         )
+        help_embed.add_field(
+            name="サーバー管理者向け（「サーバー管理」の権限が必要）",
+            value=(
+                f"`{prefix}ignore add|del @ユーザー|@ロール`・`{prefix}ignore list`: 読み上げない人・ロール\n"
+                f"`{prefix}autojoin add|del`・`{prefix}autojoin list`: VC に人が入ったら自動で接続\n"
+                f"`{prefix}readbots on|off`: ほかの Bot・Webhook の発言も読み上げる\n"
+                f"`{prefix}dict import`: 添付した JSON の辞書を読み込む（`{prefix}dict export` で書き出し）"
+            ),
+            inline=False,
+        )
+        help_embed.add_field(name=f"{prefix}status", value="Bot の動作状況を表示します。", inline=False)
         help_embed.add_field(
             name=f"{prefix}sd",
             value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
