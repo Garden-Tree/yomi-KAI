@@ -18,7 +18,7 @@ from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
-from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker
+from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker, should_read_author
 from ..text import (
     announce_text,
     autojoin_allowed,
@@ -250,9 +250,12 @@ class VoiceCog(commands.Cog):
         # プレフィックス付きはコマンドとして Bot 側で処理されるので読み上げない
         if message.content.startswith(self.config.prefix):
             return
-        # botの発言は無視
-        if message.author.bot:
+        # 自分の発言は読まない（ほかの Bot・Webhook はサーバーの設定 read_bots で決める）
+        me = getattr(self.bot, "user", None)
+        is_self = me is not None and message.author.id == me.id
+        if is_self:
             return
+        is_webhook = getattr(message, "webhook_id", None) is not None
         # DMなど、サーバー外のメッセージは無視
         guild = message.guild
         if guild is None:
@@ -289,6 +292,10 @@ class VoiceCog(commands.Cog):
             return
 
         settings = await self.settings.aget(guild.id)
+        if not should_read_author(
+            is_self=is_self, is_bot=message.author.bot, is_webhook=is_webhook, read_bots=settings.read_bots
+        ):
+            return
         # 読み上げないユーザー・ロール（y.ignore）
         roles = getattr(message.author, "roles", None) or ()
         if is_ignored(settings, message.author.id, (r.id for r in roles)):

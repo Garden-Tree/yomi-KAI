@@ -16,11 +16,10 @@ from discord.ext import commands
 
 from ..config import Config
 from ..settings import MAX_AUTOJOIN, MAX_IGNORED, SettingsStore
-from .common import SAVE_FAILED_NOTICE, original_error, reply
+from .common import MANAGE_GUILD_NOTICE, SAVE_FAILED_NOTICE, original_error, reply
 
 logger = logging.getLogger(__name__)
 
-MANAGE_GUILD_NOTICE = "このコマンドを使うには「サーバー管理」の権限が必要です"
 
 
 def autojoin_to_remove(mapping: Mapping[int, int], current_voice_id: int | None) -> int | None:

@@ -7,6 +7,7 @@
       "announce_voice": true,
       "read_name": false,
       "queue_speedup": true,
+      "read_bots": false,
       "ignored_users": ["<user_id>"],
       "ignored_roles": ["<role_id>"],
       "autojoin": {"<voice_channel_id>": "<text_channel_id>"},
@@ -63,6 +64,8 @@ class GuildSettings:
     read_name: bool = False
     # 読み上げ待ちが溜まったら速く読むか（未設定なら速く読む）
     queue_speedup: bool = True
+    # ほかの Bot・Webhook の発言も読み上げるか（未設定なら読み上げない）
+    read_bots: bool = False
     # 読み上げないユーザー・ロールの ID
     ignored_users: frozenset[int] = frozenset()
     ignored_roles: frozenset[int] = frozenset()
@@ -81,6 +84,7 @@ class GuildSettings:
         announce_voice = _flag(data, "announce_voice", True)
         read_name = _flag(data, "read_name", False)
         queue_speedup = _flag(data, "queue_speedup", True)
+        read_bots = _flag(data, "read_bots", False)
         ignored_users = frozenset(_id_list(data, "ignored_users"))
         ignored_roles = frozenset(_id_list(data, "ignored_roles"))
         autojoin = _id_map(data, "autojoin")
@@ -108,6 +112,7 @@ class GuildSettings:
             announce_voice=announce_voice,
             read_name=read_name,
             queue_speedup=queue_speedup,
+            read_bots=read_bots,
             ignored_users=ignored_users,
             ignored_roles=ignored_roles,
             autojoin=autojoin,
@@ -137,6 +142,18 @@ def _id_map(data: Mapping[str, Any], key: str) -> dict[int, int]:
     if not isinstance(raw, dict):
         raise ValueError(f"{key} はオブジェクトで指定してください")
     return {_snowflake(k, f"{key} のキー"): _snowflake(v, f"{key}[{k!r}]") for k, v in raw.items()}
+
+
+def should_read_author(*, is_self: bool, is_bot: bool, is_webhook: bool, read_bots: bool) -> bool:
+    """発言者の種類で読み上げるか決める。
+
+    自分（この Bot）の発言は読まない。ほかの Bot・Webhook の発言は read_bots のときだけ読む。
+    """
+    if is_self:
+        return False
+    if is_bot or is_webhook:
+        return read_bots
+    return True
 
 
 def is_ignored(settings: GuildSettings, user_id: int, role_ids: Iterable[int]) -> bool:

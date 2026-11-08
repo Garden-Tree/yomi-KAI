@@ -16,10 +16,11 @@ from yomi_kai.main import YomiBot
 from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
-GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict", "readname", "ignore", "autojoin", "speedup"}
+GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
+GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots"}
 TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit"}
 # 「サーバー管理」の権限が必要なコマンド
-ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del"}
+ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots"}
 # サブコマンド（プレフィックスでの名前）
 SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help", "ignore add", "ignore del", "ignore list"}
 SUBCOMMANDS |= {"autojoin add", "autojoin del", "autojoin list"}

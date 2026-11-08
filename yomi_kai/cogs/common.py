@@ -9,6 +9,7 @@ from discord.ext import commands
 
 EMBED_COLOR = 0x3399CC
 SAVE_FAILED_NOTICE = "設定の保存に失敗しました"
+MANAGE_GUILD_NOTICE = "このコマンドを使うには「サーバー管理」の権限が必要です"
 
 
 def is_slash(ctx: commands.Context) -> bool:
