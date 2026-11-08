@@ -1,4 +1,4 @@
-"""サーバー管理者向けのコマンド（ignore: 読み上げないユーザー・ロール）。
+"""サーバー管理者向けのコマンド（ignore: 読み上げないユーザー・ロール、autojoin: 自動接続）。
 
 登録・解除には「サーバー管理」（manage_guild）の権限が必要。一覧は誰でも見られる。
 hybrid グループなので ``y.ignore add @ユーザー`` と ``/ignore add`` のどちらでも同じ処理を行う。
@@ -8,18 +8,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
-from ..settings import MAX_IGNORED, SettingsStore
+from ..settings import MAX_AUTOJOIN, MAX_IGNORED, SettingsStore
 from .common import SAVE_FAILED_NOTICE, original_error, reply
 
 logger = logging.getLogger(__name__)
 
 MANAGE_GUILD_NOTICE = "このコマンドを使うには「サーバー管理」の権限が必要です"
+
+
+def autojoin_to_remove(mapping: Mapping[int, int], current_voice_id: int | None) -> int | None:
+    """y.autojoin del で外すボイスチャンネル: いるボイスチャンネルが登録済みならそれ、登録が1件だけならそれ。"""
+    if current_voice_id is not None and current_voice_id in mapping:
+        return current_voice_id
+    if len(mapping) == 1:
+        return next(iter(mapping))
+    return None
 
 
 def ignore_key(target: discord.abc.Snowflake) -> str:
@@ -103,4 +113,67 @@ class AdminCog(commands.Cog):
         for role_id in sorted(settings.ignored_roles):
             role = ctx.guild.get_role(role_id)
             lines.append(f"ロール: {role.name if role else role_id}")
+        await reply(ctx, "\n".join(lines))
+
+    # --- 自動接続 ---
+    @commands.hybrid_group(
+        name="autojoin",
+        invoke_without_command=True,
+        description="ボイスチャンネルに人が入ったら自動で接続する設定をします",
+    )
+    @commands.guild_only()
+    async def autojoin_group(self, ctx: commands.Context, *args: str) -> None:
+        await self._invalid(ctx)
+
+    @autojoin_group.command(
+        name="add", description="いまいるボイスチャンネルに人が入ったら、このチャンネルを読み上げるよう自動接続します"
+    )
+    @commands.has_guild_permissions(manage_guild=True)
+    async def autojoin_add(self, ctx: commands.Context) -> None:
+        voice = getattr(ctx.author, "voice", None)
+        if voice is None or voice.channel is None:
+            await reply(ctx, "自動接続するボイスチャンネルに入ってから実行してください", private=True)
+            return
+        voice_channel = voice.channel
+        result = await asyncio.to_thread(self.settings.set_autojoin, ctx.guild.id, voice_channel.id, ctx.channel.id)
+        if result == "full":
+            await reply(ctx, f"自動接続は{MAX_AUTOJOIN}件まで登録できます", private=True)
+            return
+        await reply(ctx, f"{voice_channel.name}に人が入ったら自動で接続し、{ctx.channel.name}を読み上げます")
+        logger.info("自動接続を登録しました (guild=%s, voice=%s)", ctx.guild.id, voice_channel.id)
+
+    @autojoin_group.command(
+        name="del", description="いまいるボイスチャンネル（登録が1件ならそれ）の自動接続を解除します"
+    )
+    @commands.has_guild_permissions(manage_guild=True)
+    async def autojoin_del(self, ctx: commands.Context) -> None:
+        mapping = (await self.settings.aget(ctx.guild.id)).autojoin
+        voice = getattr(ctx.author, "voice", None)
+        current = voice.channel.id if voice is not None and voice.channel is not None else None
+        target = autojoin_to_remove(mapping, current)
+        if target is None:
+            message = (
+                "自動接続は登録されていません"
+                if not mapping
+                else "解除するボイスチャンネルに入ってから実行してください"
+            )
+            await reply(ctx, message, private=True)
+            return
+        await asyncio.to_thread(self.settings.remove_autojoin, ctx.guild.id, target)
+        channel = ctx.guild.get_channel(target)
+        await reply(ctx, f"{channel.name if channel else target}の自動接続を解除しました")
+        logger.info("自動接続を解除しました (guild=%s, voice=%s)", ctx.guild.id, target)
+
+    @autojoin_group.command(name="list", description="自動接続の一覧を表示します")
+    async def autojoin_list(self, ctx: commands.Context) -> None:
+        mapping = (await self.settings.aget(ctx.guild.id)).autojoin
+        if not mapping:
+            await reply(ctx, "自動接続は登録されていません")
+            return
+        lines = ["自動接続（ボイスチャンネル → 読み上げるテキストチャンネル）:"]
+        for voice_id, text_id in mapping.items():
+            voice_channel, text_channel = ctx.guild.get_channel(voice_id), ctx.guild.get_channel(text_id)
+            voice_name = voice_channel.name if voice_channel else voice_id
+            text_name = text_channel.name if text_channel else text_id
+            lines.append(f"{voice_name} → {text_name}")
         await reply(ctx, "\n".join(lines))

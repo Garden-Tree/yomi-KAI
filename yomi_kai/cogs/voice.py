@@ -21,6 +21,8 @@ from ..session import AFK_NOTICE, GuildSession, SourceFactory
 from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker
 from ..text import (
     announce_text,
+    autojoin_allowed,
+    autojoin_text_channel,
     build_read_text,
     describe_attachments,
     should_read_name,
@@ -64,6 +66,10 @@ class VoiceCog(commands.Cog):
         # guild.id -> 直前に読み上げた発言の (ユーザーID, 時刻)。名前の読み上げを連投で省くために使う
         self._last_reader: dict[int, tuple[int, float]] = {}
         self._clock = time.monotonic
+        # guild.id -> 最後に自動切断した時刻（自動接続の再接続を少し待つ）
+        self._auto_disconnected_at: dict[int, float] = {}
+        # 自動接続の途中のサーバー（同時に複数人が入っても1回だけ接続する）
+        self._autojoining: set[int] = set()
 
     def get_session(self, guild_id: int) -> GuildSession:
         session = self.sessions.get(guild_id)
@@ -74,8 +80,12 @@ class VoiceCog(commands.Cog):
                 afk_time=self.config.afk_time,
                 source_factory=self.source_factory,
             )
+            session.on_auto_close = lambda: self._note_auto_disconnect(guild_id)
             self.sessions[guild_id] = session
         return session
+
+    def _note_auto_disconnect(self, guild_id: int) -> None:
+        self._auto_disconnected_at[guild_id] = self._clock()
 
     async def cog_unload(self) -> None:
         for session in self.sessions.values():
@@ -314,9 +324,11 @@ class VoiceCog(commands.Cog):
             if after.channel is None:
                 # キック・切断された
                 logger.info("ボイスチャンネルから切断されました (guild=%s)", guild.id)
+                self._note_auto_disconnect(guild.id)
                 await session.close()
             elif before.channel != after.channel and len(after.channel.members) == 1:
                 # 誰もいないチャンネルへ移動させられた
+                self._note_auto_disconnect(guild.id)
                 await session.close(notice=AFK_NOTICE)
             return
 
@@ -326,6 +338,7 @@ class VoiceCog(commands.Cog):
             and voice_client.channel == before.channel
             and len(voice_client.channel.members) == 1
         ):  # ボイスチャンネルに自分だけ残っていたら
+            self._note_auto_disconnect(guild.id)
             if session is not None and session.is_connected:
                 await session.close(notice=AFK_NOTICE)
             else:
@@ -333,7 +346,54 @@ class VoiceCog(commands.Cog):
                 logger.info(AFK_NOTICE)
             return
 
+        if await self._maybe_autojoin(member, before, after):
+            return
         await self._announce_voice(member, before, after, session)
+
+    async def _maybe_autojoin(
+        self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
+    ) -> bool:
+        """登録されたボイスチャンネルにメンバーが入ったら自動で接続する。接続したら True。"""
+        guild = member.guild
+        session = self.sessions.get(guild.id)
+        connected = (session is not None and session.is_connected) or guild.voice_client is not None
+        if connected or guild.id in self._autojoining or after.channel is None:
+            return False
+        settings = await self.settings.aget(guild.id)
+        text_id = autojoin_text_channel(
+            settings.autojoin,
+            member_is_bot=member.bot,
+            before_id=before.channel.id if before.channel is not None else None,
+            after_id=after.channel.id,
+            connected=connected,
+        )
+        if text_id is None:
+            return False
+        if not autojoin_allowed(self._auto_disconnected_at.get(guild.id), self._clock()):
+            logger.info("自動切断の直後のため自動接続しません (guild=%s)", guild.id)
+            return False
+        text_channel = guild.get_channel(text_id)
+        if text_channel is None:
+            logger.warning("自動接続先のテキストチャンネル %s が見つかりません (guild=%s)", text_id, guild.id)
+            return False
+
+        voice_channel = after.channel
+        self._autojoining.add(guild.id)
+        try:
+            voice_client = await voice_channel.connect()
+            await self.get_session(guild.id).start(voice_client, text_channel)
+            embed = discord.Embed(title="自動接続しました", color=EMBED_COLOR)
+            embed.add_field(name="テキストチャンネル", value=f"{text_channel.name}", inline=False)
+            embed.add_field(name="ボイスチャンネル", value=f"{voice_channel.name}", inline=False)
+            await text_channel.send(embed=embed)
+            logger.info("%sに自動接続しました (guild=%s)", voice_channel.name, guild.id)
+        except Exception:
+            logger.exception("自動接続に失敗しました (guild=%s)", guild.id)
+            return False
+        finally:
+            self._autojoining.discard(guild.id)
+        await self.store.aget(guild.id)
+        return True
 
     async def _announce_voice(
         self,

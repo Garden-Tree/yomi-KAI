@@ -121,6 +121,8 @@ class GuildSession:
         self._wakeup = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         self._afk_task: asyncio.Task[None] | None = None
+        # AFK タイマーで自動切断したときに呼ばれる（自動接続の再接続を少し待つために使う）
+        self.on_auto_close: Callable[[], None] | None = None
 
     # --- 状態 ---
     @property
@@ -345,4 +347,6 @@ class GuildSession:
         await asyncio.sleep(self.afk_time)
         while self.is_busy:
             await asyncio.sleep(self.afk_time)
+        if self.on_auto_close is not None:
+            self.on_auto_close()
         await self.close(notice=AFK_NOTICE)

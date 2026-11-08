@@ -320,6 +320,27 @@ def should_read_name(
     return last_user != user_id or now - last_time > window
 
 
+# 自動切断のあと、この秒数のあいだは自動接続しない（接続と切断を繰り返さないように）
+AUTOJOIN_COOLDOWN = 30.0
+
+
+def autojoin_allowed(last_auto_disconnect: float | None, now: float, cooldown: float = AUTOJOIN_COOLDOWN) -> bool:
+    """自動切断から ``cooldown`` 秒以上たっていれば（または一度も自動切断していなければ）自動接続してよい。"""
+    return last_auto_disconnect is None or now - last_auto_disconnect >= cooldown
+
+
+def autojoin_text_channel(
+    autojoin: Mapping[int, int], *, member_is_bot: bool, before_id: int | None, after_id: int | None, connected: bool
+) -> int | None:
+    """自動接続するなら読み上げるテキストチャンネルの ID、しないなら None。
+
+    Bot 以外のメンバーが、登録されたボイスチャンネルに入った（移動を含む）とき、Bot がまだ接続していなければ接続する。
+    """
+    if member_is_bot or connected or after_id is None or before_id == after_id:
+        return None
+    return autojoin.get(after_id)
+
+
 def with_name(text: str, name: str) -> str:
     """本文の前に「名前、」を付ける（切り詰めは本文だけに済ませてから呼ぶ）。"""
     return f"{name}、{text}"
