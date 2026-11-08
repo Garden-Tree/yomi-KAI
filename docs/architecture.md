@@ -22,7 +22,9 @@ yomi_kai/
   main.py              # Config・TTSエンジン・Bot を組み立てて起動（import 時の副作用なし）。スラッシュコマンドの同期、接続監視の結線
   health.py            # ハートビート・ヘルスチェック（python -m yomi_kai.health）・切断通知（discord を import しない）
   config.py            # config.ini を Config データクラスに読み込む。不備はキー名付きで報告し exit(1)
-  logging_setup.py     # コンソール INFO / log/ 配下のファイル DEBUG。ログは最新50個を保持
+  logging_setup.py     # コンソール INFO / log/ 配下のファイル DEBUG。ログは最新50個を保持。本文を含む discord.py の DEBUG ログの抑制
+  usage.py             # UsageStore: 月ごとの使用量 usage/{YYYY-MM}.json（文字数・件数のみ）と集計 CLI（python -m yomi_kai.usage）
+  blocklist.py         # GuildBlocklist: 利用を断るサーバーの一覧（settings/blocked_guilds.txt）の読み込み（discord を import しない）
   text.py              # 読み上げテキスト整形・添付ファイルの説明・入退室の判定（純粋関数のみ。I/Oなし）
   jsonfile.py          # JSON の読み込みとアトミック書き込み（DictionaryStore / SettingsStore で共有）
   dictionary.py        # DictionaryStore: dict/{guild_id}.json の読み込み・キャッシュ・アトミック書き込み
@@ -30,7 +32,7 @@ yomi_kai/
   session.py           # GuildSession: サーバーごとの接続・キュー・ワーカー・AFKタイマー
   ui.py                # 話者選択ドロップダウン（discord.ui.Select / View）
   tts/
-    __init__.py        # TTSEngine プロトコル・Speaker・CompositeEngine・find_speakers（重いライブラリは import しない）
+    __init__.py        # TTSEngine プロトコル・Speaker・CompositeEngine・FilteredEngine（話者の許可リスト）・find_speakers（重いライブラリは import しない）
     voicevox.py        # VoicevoxEngine（asyncio API の Synthesizer を VOICEVOX_WORKERS 個のプールで並行に使う）
     pool.py            # InstancePool（借りて返すプール）・LoopThread（専用スレッドのイベントループ）
     google.py          # GoogleEngine
@@ -39,9 +41,10 @@ yomi_kai/
     voice.py           # help / c / dc / s コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・入退室の読み上げ）
     settings.py        # voice / speed（ユーザーごとの話者・速度）、announce（入退室の読み上げのオン/オフ）
     dictionary.py      # dict add / del / list / help
-    misc.py            # sd（突然の死）
+    misc.py            # sd（突然の死）、credit（音声のクレジット表記）
 docker-entrypoint.sh   # Docker: ボリュームの所有者を直してから一般ユーザーで起動
-tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands）
+tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist）
+docs/hosting.md        # 公開版（ホスティング）向けの推奨設定・ブラックリスト・使用量・保存するデータ
 ```
 
 ### 2.1 TTSエンジン
@@ -50,6 +53,8 @@ tests/                 # pytest（text / dictionary / settings / session / tts /
 * **VoicevoxEngine**: ONNX Runtime と Open JTalk 辞書を起動時に一度だけ読み込み、既定では `models/vvms/0.vvm` のみをロードします（`config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を書くと `*.vvm` をすべてロード）。話者一覧はモデルのメタ情報（`VoiceModelFile.metas`）から構築し、ノーマルスタイルはキャラクター名（例: `ずんだもん`、`春日部つむぎ`）、その他のスタイルは `名前（スタイル名）` のラベルになります。ずんだもん・春日部つむぎは常に先頭に並び、Discord の制限によりドロップダウンには最大25件まで表示されます。速度が 1.0 なら `Synthesizer.tts()`、それ以外は `create_audio_query()` → `speed_scale` を設定 → `synthesis()` で合成します（いずれも `voicevox_core.asyncio` の API。次項）。
 * **GoogleEngine**: `USE_GOOGLE_TTS = True` の場合のみ構築され、`CompositeEngine` で VOICEVOX と束ねられます（初期話者は `ja-JP-Wavenet-A`）。速度は `AudioConfig.speaking_rate` で指定します。
 * **CompositeEngine**: 話者名で担当エンジンへ振り分け、`speed` はそのまま渡します。
+* **FilteredEngine（話者の許可リスト）**: `config.ini` の `SPEAKER_ALLOWLIST`（`y.voice list` の表示どおりの名前をカンマ区切り）が指定されていれば、`main.apply_speaker_allowlist()` が起動時に一度だけ、構築したエンジン（`CompositeEngine` を含む）を `FilteredEngine` で包みます。`speakers()` は元の順序のまま許可された話者だけを返し、`synthesize()` は元のエンジンに任せます（許可されていない話者が渡されたら既定話者で合成）。元の既定話者が許可されていなければ、許可された最初の話者を既定にします。Cog はすべてこの包んだエンジンを受け取るので、ドロップダウン・`y.voice 名前`・`y.voice list`・`resolve_voice`・`y.credit` は許可された話者しか見ません（保存済みの設定が許可外の話者を指していれば `resolve_voice` が次の段へ飛ばす）。見つからない名前は起動時に警告し、1つも残らなければ `ConfigError` として exit(1) します。未設定なら包みません。
+* **クレジット表記**: `Speaker.credit` に利用規約で求められる表記を持たせます。`VoicevoxEngine` はモデルのメタ情報（`VoiceModelFile.metas` のキャラクター名）から `VOICEVOX:ずんだもん` を設定し（スタイル名は含まない。ラベルの解析はしない）、Google の話者は `None` です。`y.credit` は使える話者の `credit` を重複なく並べ、VOICEVOX の利用規約（https://voicevox.hiroshiba.jp/term/ ）へのリンクと、Google TTS 有効時はその旨を添えます。
 * **VOICEVOX の並行合成（Synthesizer のプール）**: voicevox_core 0.16.4 のソースを確認した結果、次のことが分かっています。
   * ONNX のセッションは `async_lock::Mutex<ort::session::Session>` で守られている（[crates/voicevox_core/src/core/infer/runtimes/onnxruntime.rs](https://github.com/VOICEVOX/voicevox_core/blob/0.16.4/crates/voicevox_core/src/core/infer/runtimes/onnxruntime.rs)）。1つの `Synthesizer` を複数スレッドから呼んでも安全だが、推論は直列になる。
   * Python の blocking API（`voicevox_core.blocking`）は **GIL を握ったまま**合成する（[crates/voicevox_core_python_api/src/lib.rs](https://github.com/VOICEVOX/voicevox_core/blob/0.16.4/crates/voicevox_core_python_api/src/lib.rs) の blocking `tts` は GIL を解放せずに `perform()` する）。スレッドを増やしても速くならないうえ、合成中は Bot のイベントループ（Discord との通信・音声の送信）も止まる。実測でも、合成中に別スレッドが回せた Python の処理は通常の 0.5% 程度だった。
@@ -93,7 +98,7 @@ tests/                 # pytest（text / dictionary / settings / session / tts /
 ### 2.4 コマンド（hybrid コマンド）
 コマンドはすべて `commands.hybrid_command` / `hybrid_group` で定義しており、1つの実装で `y.c`（プレフィックス）と `/c`（スラッシュコマンド）の両方に対応します。
 
-* スラッシュコマンド名はプレフィックスと同じ（`c`, `dc`, `s`, `voice`, `speed`, `announce`, `dict add|del|list|help`, `sd`, `help`）で、日本語の説明と引数の説明（`app_commands.describe`）を付けています。`s` の `mode` は `all` のみの選択肢、`announce` の `state` は `on` / `off` の選択肢、`speed` の `value` は `reset` も受け付けるため文字列です。サーバー専用のコマンドは `commands.guild_only()` により DM のスラッシュコマンド一覧にも出ません。
+* スラッシュコマンド名はプレフィックスと同じ（`c`, `dc`, `s`, `voice`, `speed`, `announce`, `dict add|del|list|help`, `sd`, `credit`, `help`）で、日本語の説明と引数の説明（`app_commands.describe`）を付けています。`s` の `mode` は `all` のみの選択肢、`announce` の `state` は `on` / `off` の選択肢、`speed` の `value` は `reset` も受け付けるため文字列です。サーバー専用のコマンドは `commands.guild_only()` により DM のスラッシュコマンド一覧にも出ません。
 * 返信はすべて `ctx.send`（`cogs/common.reply`）を通します。プレフィックスでは従来どおりチャンネルへの送信、スラッシュではインタラクションへの応答（2通目以降はフォローアップ）になるので「アプリケーションが応答しませんでした」になりません。`reply(..., private=True)` はスラッシュのときだけ ephemeral（本人にだけ表示）になり（`ctx.interaction is not None` で判定）、個人設定（`voice` / `speed`）の返信や引数の誤りの案内に使います。`voice` のドロップダウンは誰でも操作できるため公開のままです。`c` / `dc` は接続・切断に時間がかかることがあるため、先に `ctx.defer()` します（プレフィックスでは何もしない）。
 * 引数の過不足・不正な値（`commands.UserInputError`）は各 Cog の `cog_command_error` が従来と同じ案内（「コマンドが間違っています」など）を返します（`ignore_extra=False` で余分な引数もエラーにする）。設定の保存失敗は、プレフィックスの `CommandInvokeError` とスラッシュの `HybridCommandError` を `original_error()` でほどいて判定します。
 * `setup_hook` で Cog を登録したあと `bot.tree.sync()` でグローバルに同期し、件数をログに出します（失敗してもログに出して起動は続ける）。グローバルコマンドは Discord のクライアントに反映されるまで時間がかかることがあり、招待時に `applications.commands` スコープが必要です。メッセージの読み上げには引き続き Message Content Intent が必要です。
@@ -112,7 +117,23 @@ tests/                 # pytest（text / dictionary / settings / session / tts /
 4. **音声合成・再生**: 上記のワーカーが、メッセージを文ごとのかたまりに分けて先読みしながら、発言者ごとに決めた話者・速度（2.3節）に応じたエンジンでメモリ上に WAV を生成し、FFmpeg 経由で順番にVCへ送信。
 5. **AFK監視**: 接続時および読み上げのたびにタイマーを張り直し、`AFK_TIME` 秒間読み上げがない場合や、VCにBot以外誰もいなくなった場合は自動でボイスチャンネルから切断。
 
-ログはコンソールに INFO 以上、`log/` 配下のファイルに DEBUG 以上を出力します（読み上げた本文はファイルにのみ DEBUG で記録）。
+ログはコンソールに INFO 以上、`log/` 配下のファイルに DEBUG 以上を出力します。
+
+* **本文のログ（`LOG_READ_TEXT`、既定 False）**: False のとき、メッセージの本文・読み上げテキスト・合成するかたまりのテキストはどのレベルのログにも出しません（`on_message` は文字数・話者・速度だけを INFO で記録）。discord.py は受信した Gateway のイベント（`MESSAGE_CREATE` の本文を含む）と HTTP の送受信内容を DEBUG で出すため、`logging_setup.set_text_logging(False)` が `discord.gateway` / `discord.http` / `discord.webhook.async_` のロガーを INFO 以上に絞ります。True にすると従来どおり `ReadSentence:本文` を DEBUG で記録し、discord.py のロガーも絞りません。辞書の追加・削除（単語と読み）は管理操作なのでログに残します。
+* `tests/test_voice_cog.py` が、既定の設定で偽のエンジンを使って `on_message` → `enqueue` → 合成を通し、DEBUG までのすべてのログに本文が含まれないことを確かめています。
+
+### 3.1 使用量の計測（`usage.py`）
+* 読み上げを受け付けた（`session.enqueue` が True を返した）発言ごとに、`UsageStore.record(guild_id, user_id, 文字数)` がメモリ上の増分に足します。文字数は `MAX_READ_LENGTH` で切り詰めたあとの読み上げテキストの長さです。入退室の読み上げはユーザーの使用量に含めず、`record_system()` でサーバーの `system_chars` に数えます。本文は保存しません。上限や制限はなく、常に有効です。
+* 形式は `usage/{YYYY-MM}.json` に `{"guilds": {"<guild_id>": {"chars", "messages", "system_chars", "users": {"<user_id>": {"chars", "messages"}}}}}`（`USAGE_DIR` で保存先を変更可）。月はサーバーのローカル時刻（Docker は `TZ=Asia/Tokyo`）で決めます。
+* `record()` は I/O をしません。`YomiBot` のバックグラウンドタスクが60秒ごとに、増分があれば `asyncio.to_thread(flush)` で書き込み、終了時（`close()` で Cog を外したあと）にも書き込みます。`flush()` はファイルを読んで増分を足し、`jsonfile.write_json_atomic` で書き込むので、再起動しても月の途中から数え続けられます。書き込みに失敗した増分は戻して次回また書き込みます。
+* 壊れたファイル（JSON として読めない・形が違う）は上書きせず `{name}.corrupt-{日時}` に名前を変え、その月を新しく数え直します。
+* `python -m yomi_kai.usage [YYYY-MM] [--dir DIR]` はサーバー数・利用ユーザー数（重複を除く）・合計の文字数と件数・文字数の多いサーバー上位10件を表示します。`discord` / `voicevox_core` を import しません。
+
+### 3.2 ブラックリスト（`blocklist.py`）
+* `settings/blocked_guilds.txt`（`BLOCKED_GUILDS_FILE`）に1行に1つサーバー ID を書きます（`#` 以降はコメント、空行は無視、ID でない行は警告して無視）。ファイルが無ければ何もブロックしません。
+* `GuildBlocklist.reload_if_changed()` は更新時刻が変わったときだけ読み直し、新たにブロックされた ID を返します。`setup_hook` で一度読み、以後はバックグラウンドタスクが30秒ごとに `asyncio.to_thread` で確認します。`is_blocked()` はメモリ上の集合を引くだけです。
+* ブロックされたサーバーでは、`YomiBot.on_message` がプレフィックスのコマンドを処理せず、`bot.add_check` のグローバルチェックがコマンド（hybrid コマンドのスラッシュ側も `bot.can_run` を通る）を弾き、`VoiceCog.on_message` が読み上げません。`on_command_error` もブロックされたサーバーには何も返しません。
+* `on_ready`（参加中のすべてのサーバー）・`on_guild_join`・ファイルの更新で新たにブロックされたとき、`leave_blocked_guild()` が接続中のセッションを `close()` してから `guild.leave()` し、サーバー ID と名前を WARNING で記録します。
 
 ## 4. デプロイと配布アーキテクチャ
 
@@ -130,9 +151,9 @@ Python環境の構築やコマンド操作をユーザーに強いることな�
 
 ### 4.2 自己ホスト向けのDocker版
 Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-compose` での一発構築を提供しています。
-軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`)、各種ログ(`log/`)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
+軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`)、各種ログ(`log/`)、月ごとの使用量(`usage/`)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
 
-* **一般ユーザーでの実行**: Bot はイメージ内で作成した `yomi`（uid/gid 1000）ユーザーで動きます。ボリュームのディレクトリは Docker がホスト側に root 所有で作るため、`docker-entrypoint.sh` が root で起動して `dict/` `settings/` `log/` のうち所有者が違うものだけ `chown` し、`setpriv --reuid --regid --init-groups` で権限を落としてから Bot を起動します（既存の環境でも手作業は不要）。`config.ini`（読み取り専用マウント）が `yomi` で読めない権限の場合だけは、警告を出して root のまま起動します。
+* **一般ユーザーでの実行**: Bot はイメージ内で作成した `yomi`（uid/gid 1000）ユーザーで動きます。ボリュームのディレクトリは Docker がホスト側に root 所有で作るため、`docker-entrypoint.sh` が root で起動して `dict/` `settings/` `log/` `usage/` のうち所有者が違うものだけ `chown` し、`setpriv --reuid --regid --init-groups` で権限を落としてから Bot を起動します（既存の環境でも手作業は不要）。`config.ini`（読み取り専用マウント）が `yomi` で読めない権限の場合だけは、警告を出して root のまま起動します。
 * **ヘルスチェック**: `HEALTHCHECK` で `python -m yomi_kai.health` を60秒ごとに実行し（起動後120秒は猶予）、ハートビートが途絶えるとコンテナが `unhealthy` になります（`restart: unless-stopped` は unhealthy では再起動しないため、状態の可視化が目的。長時間の切断は Webhook で通知）。
 * レイヤーは apt → ユーザー作成 → pip → VOICEVOX のダウンロード → コードのコピーの順で、コードだけの変更なら最後の層だけが再ビルドされます。
 
