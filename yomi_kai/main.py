@@ -16,6 +16,7 @@ from .dictionary import DictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
 from .settings import SettingsStore
 from .tts import TTSEngine
+from .usage import UsageStore
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,14 @@ def build_engine(config: Config) -> TTSEngine:
 
 
 class YomiBot(commands.Bot):
-    def __init__(self, config: Config, engine: TTSEngine, store: DictionaryStore, settings: SettingsStore) -> None:
+    def __init__(
+        self,
+        config: Config,
+        engine: TTSEngine,
+        store: DictionaryStore,
+        settings: SettingsStore,
+        usage: UsageStore | None = None,
+    ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
@@ -46,7 +54,10 @@ class YomiBot(commands.Bot):
         self.engine = engine
         self.store = store
         self.settings = settings
+        # 使用量の計測（常に有効。本文は保存しない）
+        self.usage = usage if usage is not None else UsageStore(config.usage_dir)
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._usage_task: asyncio.Task[None] | None = None
         # on_disconnect で True、on_ready / on_resumed で False（is_ready() は切断中も True のままのことがある）
         self._gateway_down = True
         self.alerter: DisconnectAlerter | None = None
@@ -62,6 +73,7 @@ class YomiBot(commands.Bot):
 
     def _start_monitoring(self) -> None:
         self._heartbeat_task = asyncio.create_task(heartbeat_loop(self.is_gateway_alive), name="yomi-kai-heartbeat")
+        self._usage_task = asyncio.create_task(self.usage.run_flusher(), name="yomi-kai-usage")
         if self.alerter is not None:
             # 起動直後に接続できない状態が続いた場合も通知できるよう、接続完了までは切断中として扱う
             self.alerter.disconnected()
@@ -79,9 +91,16 @@ class YomiBot(commands.Bot):
     async def close(self) -> None:
         if self._heartbeat_task is not None:
             self._heartbeat_task.cancel()
+        if self._usage_task is not None:
+            self._usage_task.cancel()
         if self.alerter is not None:
             await self.alerter.close()
+        # Cog の取り外し（読み上げの停止）まで済んでから、残りの使用量を書き込む
         await super().close()
+        try:
+            await self.usage.aflush()
+        except Exception:
+            logger.exception("使用量の書き込みに失敗しました")
 
     async def setup_hook(self) -> None:
         self._start_monitoring()
@@ -95,7 +114,15 @@ class YomiBot(commands.Bot):
         ffmpeg_path = find_ffmpeg()
         logger.debug("ffmpeg: %s", ffmpeg_path)
         await self.add_cog(
-            VoiceCog(self, self.config, self.engine, self.store, self.settings, ffmpeg_source_factory(ffmpeg_path))
+            VoiceCog(
+                self,
+                self.config,
+                self.engine,
+                self.store,
+                self.settings,
+                ffmpeg_source_factory(ffmpeg_path),
+                usage=self.usage,
+            )
         )
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))

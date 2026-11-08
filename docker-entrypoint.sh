@@ -1,7 +1,7 @@
 #!/bin/sh
 # コンテナの起動処理: root で起動し、データ用ディレクトリの所有者を直してから一般ユーザー（yomi）で Bot を実行する。
 #
-# ボリューム（./dict ./settings ./log）は Docker がホスト側に root 所有で作るため、
+# ボリューム（./dict ./settings ./log ./usage）は Docker がホスト側に root 所有で作るため、
 # 一般ユーザーのままでは書き込めない。既存の環境でも手作業なしで動くよう、起動のたびにここで所有者を直す。
 set -eu
 
@@ -14,7 +14,7 @@ if [ "$(id -u)" != "0" ]; then
     exec "$@"
 fi
 
-for dir in /app/dict /app/settings /app/log; do
+for dir in /app/dict /app/settings /app/log /app/usage; do
     mkdir -p "$dir"
     # 所有者が違うものだけ直す（毎回すべてを書き換えない）
     find "$dir" \( ! -user "$APP_UID" -o ! -group "$APP_GID" \) -exec chown "$APP_UID:$APP_GID" {} +

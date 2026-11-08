@@ -135,6 +135,7 @@ dmypy.json
 dict/
 settings/
 log/
+usage/
 temp/
 yomi-KAI-v*/
 *.zip

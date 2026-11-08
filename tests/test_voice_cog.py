@@ -1,8 +1,10 @@
 """VoiceCog.on_message（読み上げの受け付け）のテスト。Discord には接続しない。"""
 
 import asyncio
+import json
 import logging
 import time
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +14,9 @@ from yomi_kai.config import Config
 from yomi_kai.dictionary import DictionaryStore
 from yomi_kai.logging_setup import PAYLOAD_LOGGERS, set_text_logging
 from yomi_kai.settings import SettingsStore
+from yomi_kai.text import TRUNCATED_SUFFIX
 from yomi_kai.tts import Speaker
+from yomi_kai.usage import UsageStore
 
 SECRET = "ひみつのほんぶんです。二文目もあります！"
 GUILD_ID = 1
@@ -153,6 +157,19 @@ def test_read_text_is_logged_when_enabled(tmp_path, captured_logs):
     cog = make_cog(tmp_path, make_config(log_read_text=True), engine)
     asyncio.run(read_message(cog, engine, SECRET))
     assert any(SECRET in m for m in captured_logs)
+
+
+def test_accepted_message_is_metered_after_truncation(tmp_path):
+    engine = FakeEngine()
+    usage = UsageStore(tmp_path / "usage", clock=lambda: datetime(2026, 11, 9))
+    cog = make_cog(tmp_path, make_config(max_read_length=5), engine, usage=usage)
+    asyncio.run(read_message(cog, engine, "あいうえおかきくけこ"))
+    usage.flush()
+    with open(tmp_path / "usage" / "2026-11.json", encoding="UTF-8") as f:
+        guild = json.load(f)["guilds"][str(GUILD_ID)]
+    expected = len("あいうえお" + TRUNCATED_SUFFIX)
+    assert guild["chars"] == expected and guild["messages"] == 1
+    assert guild["users"] == {str(USER_ID): {"chars": expected, "messages": 1}}
 
 
 def test_set_text_logging_silences_discord_payload_logs():
