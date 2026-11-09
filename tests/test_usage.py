@@ -139,6 +139,33 @@ def test_corrupt_file_is_renamed_not_overwritten(tmp_path, content):
     assert read_json(path)["guilds"][str(GUILD_A)]["chars"] == 5
 
 
+def test_unreadable_file_is_not_renamed_and_delta_is_kept(tmp_path, monkeypatch):
+    # 読めないだけ（権限など）のファイルは壊れているとはみなさず、退避も数え直しもしない
+    store, _ = make_store(tmp_path)
+    path = tmp_path / "usage" / "2026-11.json"
+    path.parent.mkdir()
+    existing = {"guilds": {str(GUILD_A): {"chars": 10, "messages": 1, "users": {}}}}
+    path.write_text(json.dumps(existing), encoding="UTF-8")
+
+    import yomi_kai.usage as usage
+
+    original = usage.read_json_object
+
+    def unreadable(p):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(usage, "read_json_object", unreadable)
+    store.record(GUILD_A, ALICE, 5)
+    store.flush()
+    assert store.dirty
+    assert not list(path.parent.glob("2026-11.json.corrupt-*"))
+
+    monkeypatch.setattr(usage, "read_json_object", original)
+    store.flush()
+    assert not store.dirty
+    assert read_json(path)["guilds"][str(GUILD_A)]["chars"] == 15
+
+
 def test_periodic_flusher_batches_writes(tmp_path):
     store, _ = make_store(tmp_path)
     path = tmp_path / "usage" / "2026-11.json"

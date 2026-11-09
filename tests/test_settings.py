@@ -175,11 +175,11 @@ def test_announce_voice_defaults_to_on_and_persists(tmp_path):
     store = SettingsStore(tmp_path)
     assert store.get(GUILD).announce_voice is True
     store.set_user_speed(GUILD, ALICE, 1.2)
-    store.set_announce_voice(GUILD, False)
+    store.set_flag(GUILD, "announce_voice", False)
     assert store.get(GUILD).announce_voice is False
     assert read_json(tmp_path / f"{GUILD}.json") == {"users": {str(ALICE): {"speed": 1.2}}, "announce_voice": False}
     assert SettingsStore(tmp_path).get(GUILD).announce_voice is False
-    store.set_announce_voice(GUILD, True)
+    store.set_flag(GUILD, "announce_voice", True)
     assert SettingsStore(tmp_path).get(GUILD).announce_voice is True
 
 

@@ -102,15 +102,15 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 
 * `y.c` のドロップダウン → サーバーの話者（`speaker`）。`y.voice` のドロップダウン → 操作したユーザーの話者（`y.voice 名前` はコマンドを打ったユーザーの話者）。`y.announce on|off` → 入退室の読み上げ（`announce_voice`、未設定なら true）。`y.speed` → コマンドを打ったユーザーの速度（0.5〜2.0）。`y.readname` / `y.speedup` / `y.readbots` → `read_name` / `queue_speedup` / `read_bots`（`set_flag`）。`y.ignore add|del` → `ignored_users` / `ignored_roles`。`y.autojoin add|del` → `autojoin`。`reset` で解除し、ユーザーの設定が空になったらエントリごと削除します。
 * 書き込みはイベントループから `asyncio.to_thread` 経由で行い、読み込みは `aget()`（キャッシュがあれば I/O なし）を使います。
-* 壊れたファイルは読み込み時は空の設定として扱い（ログに出力）、書き込み時は上書きせずに例外を送出します（辞書と同じ方針）。未知のキーは書き込み時もそのまま残します。
+* 壊れたファイルは読み込み時は空の設定として扱い（ログに出力）、書き込み時は上書きせずに例外を送出します（辞書と同じ方針）。発言のたびに読み直さないよう、読み込みに失敗してから60秒は読み直さずに空の設定を返し（`jsonfile.FailedLoads`）、トレースバックはファイルが変わったときだけ出します。未知のキーは書き込み時もそのまま残します。
 * **話者の決定順（`resolve_voice`）**: ユーザー個人の話者 → サーバーの話者 → エンジンの既定話者。保存された話者が現在のエンジンで利用できない場合（Google TTS を無効にした、モデルを減らした等）はその段を飛ばします。速度はユーザーの設定、なければ 1.0（範囲外の値は 0.5〜2.0 に丸める）。
 
 ### 2.4 コマンド（hybrid コマンド）
 コマンドはすべて `commands.hybrid_command` / `hybrid_group` で定義しており、1つの実装で `y.c`（プレフィックス）と `/c`（スラッシュコマンド）の両方に対応します。
 
-* スラッシュコマンド名はプレフィックスと同じ（`c`, `dc`, `s`, `voice`, `speed`, `announce`, `dict add|del|list|export|import|help`, `sd`, `credit`, `help`, `readname`, `speedup`, `readbots`, `ignore add|del|list`, `autojoin add|del|list`, `status`）で、日本語の説明と引数の説明（`app_commands.describe`）を付けています。`s` の `mode` は `all` のみの選択肢、`announce` の `state` は `on` / `off` の選択肢、`speed` の `value` は `reset` も受け付けるため文字列です。サーバー専用のコマンドは `commands.guild_only()` により DM のスラッシュコマンド一覧にも出ません。
+* スラッシュコマンド名はプレフィックスと同じ（`c`, `dc`, `s`, `voice`, `speed`, `announce`, `dict add|del|list|export|import|help`, `sd`, `credit`, `help`, `readname`, `speedup`, `readbots`, `ignore add|del|list`, `autojoin add|del|list`, `status`）で、日本語の説明と引数の説明（`app_commands.describe`）を付けています。`s` の `mode` は `all` のみの選択肢、`announce` の `state` は `on` / `off` の選択肢、`speed` の `value` は `reset` も受け付けるため文字列です。サーバー専用のコマンドは `commands.guild_only()` / `app_commands.guild_only()` により DM のスラッシュコマンド一覧にも出ません。設定・辞書・管理者向けの Cog は、DM での実行（プレフィックスのサブコマンドを含む）を Cog の `cog_check`（`cogs/common.guild_only_check`）で一律に `NoPrivateMessage` にしており、`Bot.on_command_error` が「このコマンドはサーバー内でのみ使用できます」と返します（`invoke_without_command` のグループでは、グループの `commands.guild_only()` がプレフィックスのサブコマンドに効かないため）。
 * 返信はすべて `ctx.send`（`cogs/common.reply`）を通します。プレフィックスでは従来どおりチャンネルへの送信、スラッシュではインタラクションへの応答（2通目以降はフォローアップ）になるので「アプリケーションが応答しませんでした」になりません。`reply(..., private=True)` はスラッシュのときだけ ephemeral（本人にだけ表示）になり（`ctx.interaction is not None` で判定）、個人設定（`voice` / `speed`）の返信や引数の誤りの案内に使います。`voice` のドロップダウンは誰でも操作できるため公開のままです。`c` / `dc` は接続・切断に時間がかかることがあるため、先に `ctx.defer()` します（プレフィックスでは何もしない）。
-* 引数の過不足・不正な値（`commands.UserInputError`）は各 Cog の `cog_command_error` が従来と同じ案内（「コマンドが間違っています」など）を返します（`ignore_extra=False` で余分な引数もエラーにする）。設定の保存失敗は、プレフィックスの `CommandInvokeError` とスラッシュの `HybridCommandError` を `original_error()` でほどいて判定します。
+* 引数の過不足・不正な値（`commands.UserInputError`）は各 Cog の `cog_command_error` が従来と同じ案内（「コマンドが間違っています」など）を返します（`ignore_extra=False` で余分な引数もエラーにする）。設定・辞書ファイルの読み書きの失敗（`OSError` / `ValueError`）も「設定の保存に失敗しました」「辞書の保存に失敗しました」を本人にだけ返します（返さないとスラッシュが「考え中…」のまま残る）。判定は共通の `cogs/common.handle_command_error` で行い、プレフィックスの `CommandInvokeError` とスラッシュの `HybridCommandError` を `original_error()` でほどいてから判定します。
 * **サーバー管理者向けのコマンド**: `ignore add|del`・`autojoin add|del`・`readbots`・`dict import` は `commands.has_guild_permissions(manage_guild=True)` で「サーバー管理」の権限を求めます（スラッシュでも hybrid コマンドのチェックとして働く）。権限がなければ各 Cog の `cog_command_error` が「このコマンドを使うには「サーバー管理」の権限が必要です」を返し（スラッシュでは ephemeral）、`Bot.on_command_error` は `CheckFailure` をエラーとして記録しません。`ignore` の対象は `discord.Member | discord.Role`（スラッシュではメンション可能な値の選択肢）、`dict import` のファイルは `discord.Attachment`（プレフィックスではメッセージの添付、スラッシュでは `attachment` 引数）です。
 * **辞書の書き出し・読み込み**: `dict export` は辞書ファイルと同じ形式（indent=2, ensure_ascii=False）の `dict-{guild_id}.json` を添付します。`dict import` は100KBまでの JSON を `parse_dictionary_import()` で検証し（オブジェクトで、単語・読みとも空でない文字列）、`DictionaryStore.merge()` がロックの中でまとめて書き込みます（同じ単語はファイルの読みで上書き、`MAX_DICT_ENTRIES` に収まる分だけ追加し、飛ばした件数を返す）。
 * **`status`**: Discord の応答時間（`bot.latency`）、接続中のセッション数、このサーバーの合成待ちのメッセージ数（`session.pending`）、`VOICEVOX_WORKERS`、合成の状態（全セッション共通の `SynthesisStats` が最後の成功・失敗の時刻と失敗回数を持ち、最後の失敗のあとに成功していれば正常）、稼働時間（`YomiBot.started_at`）、バージョン（環境変数 `YOMI_KAI_VERSION`、無ければ「不明」）を表示します。整形は `status.py` の純粋関数です。
@@ -140,7 +140,7 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 * 既定では無効です（`RECORD_USAGE = False`）。無効のとき `YomiBot.usage` は `None` で、`UsageStore` を作らず、書き込みのタスクも動かしません。`VoiceCog` は `usage` が `None` なら記録しません。
 * 形式は `usage/{YYYY-MM}.json` に `{"guilds": {"<guild_id>": {"chars", "messages", "system_chars", "users": {"<user_id>": {"chars", "messages"}}}}}`（`USAGE_DIR` で保存先を変更可）。月はサーバーのローカル時刻（Docker は `TZ=Asia/Tokyo`）で決めます。
 * `record()` は I/O をしません。`YomiBot` のバックグラウンドタスクが60秒ごとに、増分があれば `asyncio.to_thread(flush)` で書き込み、終了時（`close()` で Cog を外したあと）にも書き込みます。`flush()` はファイルを読んで増分を足し、`jsonfile.write_json_atomic` で書き込むので、再起動しても月の途中から数え続けられます。書き込みに失敗した増分は戻して次回また書き込みます。
-* 壊れたファイル（JSON として読めない・形が違う）は上書きせず `{name}.corrupt-{日時}` に名前を変え、その月を新しく数え直します。
+* 壊れたファイル（JSON として読めない・形が違う）は上書きせず `{name}.corrupt-{日時}` に名前を変え、その月を新しく数え直します。権限などで読めないだけの場合（`OSError`）は名前を変えず、増分を残して次回また書き込みます。
 * `python -m yomi_kai.usage [YYYY-MM] [--dir DIR]` はサーバー数・利用ユーザー数（重複を除く）・合計の文字数と件数・文字数の多いサーバー上位10件を表示します。`discord` / `voicevox_core` を import しません。
 
 ### 3.2 ブラックリスト（`blocklist.py`）
@@ -183,7 +183,7 @@ Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-c
 
 1. `git merge --ff-only` でそのコミットへ更新（運用ディレクトリにローカル変更があれば何もせず失敗）。
 2. 動作中のコンテナのイメージを `yomi-kai:previous` として退避。
-3. `docker compose build --build-arg GIT_SHA=<短いハッシュ>` → `docker compose up -d`（Dockerfile の `ARG GIT_SHA` を `ENV YOMI_KAI_VERSION` にして、`y.status` にバージョンとして表示する。`ARG` はコードのコピーより後なので、値が変わっても再ビルドされるのは最後の層だけ）。ビルドに失敗した場合は git を元に戻して終了（旧版のコンテナは動き続ける）。
+3. `docker compose build --build-arg GIT_SHA=<短いハッシュ>` → `docker compose up -d`（Dockerfile の `ARG GIT_SHA` を `ENV YOMI_KAI_VERSION` にして、`y.status` にバージョンとして表示する。`ARG` はコードのコピーより後なので、値が変わっても再ビルドされるのは最後の層だけ）。ビルドに失敗した場合は git を元に戻して終了（旧版のコンテナは動き続ける）。ビルドしたイメージが動作中のコンテナと同じ（動作中のコミットやそれより古いコミットを指定した場合）なら、コンテナを入れ替えずに成功で終了。`up -d` が失敗した場合は 6. のロールバックを行う。
 4. 起動確認: 最大120秒、コンテナのログに `Launch complete!` が出るのを待つ。
 5. 成功なら、タグのないイメージと7日以上使っていないビルドキャッシュを削除。直近のキャッシュは残すので、コードだけの変更なら apt / pip / VOICEVOX のダウンロードはやり直さない。
 6. 失敗なら直近のログを出力し、git を直前のコミットに戻して `yomi-kai:previous` で再起動（ロールバック）。デプロイは失敗として GitHub に表示される。
