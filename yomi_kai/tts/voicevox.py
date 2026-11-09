@@ -70,6 +70,11 @@ def style_label(character_name: str, style_name: str) -> str:
     return character_name if style_name == NORMAL_STYLE else f"{character_name}（{style_name}）"
 
 
+def credit_line(character_name: str) -> str:
+    """VOICEVOX の利用規約で求められるクレジット表記（例: ``VOICEVOX:ずんだもん``）。"""
+    return f"VOICEVOX:{character_name}"
+
+
 async def synthesize_with(synthesizer: Synthesizer, text: str, style_id: int, speed: float) -> bytes:
     """速度が 1.0 なら ``tts``、それ以外は AudioQuery の ``speed_scale`` を変えて ``synthesis`` する。"""
     if speed == 1.0:
@@ -128,7 +133,9 @@ class VoicevoxEngine:
         threads = worker_threads(workers)
         self._loop = LoopThread("yomi-kai-voicevox")
         try:
-            synthesizers, style_ids = self._loop.run(self._load(voicevox_dir, vvm_paths, workers, threads))
+            synthesizers, style_ids, characters = self._loop.run(
+                self._load(voicevox_dir, vvm_paths, workers, threads)
+            )
             if not style_ids:
                 raise RuntimeError("読み込んだモデルに利用可能な話者がありません")
             # Queue はループ上で作る（そのループからだけ使う）
@@ -143,7 +150,8 @@ class VoicevoxEngine:
         if len(ordered) > MAX_OPTIONS:
             logger.warning("VOICEVOXの話者が%d件あるため、先頭%d件のみ選択肢に表示します", len(ordered), MAX_OPTIONS)
         self._style_ids = style_ids
-        self._speakers = [Speaker(name, f"VOICEVOX {name}") for name in ordered]
+        # クレジット表記（VOICEVOX:キャラクター名）はモデルのメタ情報のキャラクター名から作る
+        self._speakers = [Speaker(name, f"VOICEVOX {name}", credit_line(characters[name])) for name in ordered]
         self._default = ordered[0]
 
         rss_after = current_rss_mb()
@@ -153,7 +161,7 @@ class VoicevoxEngine:
     @staticmethod
     async def _load(
         voicevox_dir: Path, vvm_paths: list[Path], workers: int, threads: int
-    ) -> tuple[list[Synthesizer], dict[str, int]]:
+    ) -> tuple[list[Synthesizer], dict[str, int], dict[str, str]]:
         onnx = Onnxruntime.get()
         if onnx is None:
             onnx_path = voicevox_dir / "onnxruntime/lib" / _onnxruntime_filename(voicevox_dir)
@@ -162,6 +170,7 @@ class VoicevoxEngine:
         synthesizers = [Synthesizer(onnx, open_jtalk, cpu_num_threads=threads) for _ in range(workers)]
 
         style_ids: dict[str, int] = {}
+        characters: dict[str, str] = {}  # 話者のラベル -> キャラクター名
         for vvm_path in vvm_paths:
             async with await VoiceModelFile.open(vvm_path) as model:
                 for synthesizer in synthesizers:
@@ -170,9 +179,11 @@ class VoicevoxEngine:
                     for style in character.styles:
                         if getattr(style, "type", "talk") != "talk":
                             continue
-                        style_ids.setdefault(style_label(character.name, style.name), int(style.id))
+                        label = style_label(character.name, style.name)
+                        style_ids.setdefault(label, int(style.id))
+                        characters.setdefault(label, character.name)
             logger.info("VOICEVOXモデルを読み込みました: %s", vvm_path.name)
-        return synthesizers, style_ids
+        return synthesizers, style_ids, characters
 
     @property
     def workers(self) -> int:

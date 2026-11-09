@@ -18,10 +18,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Speaker:
-    """話者。``name`` がドロップダウンのラベル兼 ID になる。"""
+    """話者。``name`` がドロップダウンのラベル兼 ID になる。
+
+    ``credit`` は利用規約で求められるクレジット表記（VOICEVOX の話者なら ``VOICEVOX:ずんだもん`` のように
+    スタイル名を含まないキャラクター名）。不要なエンジン（Google など）は None。
+    """
 
     name: str
     description: str
+    credit: str | None = None
 
 
 def _normalize(name: str) -> str:
@@ -101,3 +106,38 @@ class CompositeEngine:
             speaker = self._default
             engine = self._owner[speaker]
         return engine.synthesize(text, speaker, speed)
+
+
+class FilteredEngine:
+    """話者を許可リスト（config.ini の SPEAKER_ALLOWLIST）に絞るエンジン。合成は元のエンジンに任せる。
+
+    話者の並びは元のエンジンの順のまま。元の既定話者が許可されていなければ、許可された最初の話者を既定にする。
+    許可されていない話者が指定された場合は既定話者で読み上げる（保存済みの設定は ``resolve_voice`` が先に飛ばす）。
+    """
+
+    def __init__(self, engine: TTSEngine, allowed: Iterable[str]) -> None:
+        allowed = list(dict.fromkeys(allowed))
+        available = {s.name for s in engine.speakers()}
+        allowed_set = set(allowed)
+        #: 許可リストにあるが、エンジンに存在しない名前（指定順）
+        self.unknown = [name for name in allowed if name not in available]
+        self._engine = engine
+        self._speakers = [s for s in engine.speakers() if s.name in allowed_set]
+        if not self._speakers:
+            raise ValueError("許可された話者がありません")
+        names = {s.name for s in self._speakers}
+        self._default = engine.default_speaker if engine.default_speaker in names else self._speakers[0].name
+        self._names = frozenset(names)
+
+    @property
+    def default_speaker(self) -> str:
+        return self._default
+
+    def speakers(self) -> list[Speaker]:
+        return list(self._speakers)
+
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+        if speaker not in self._names:
+            logger.warning("許可されていない話者 %s が指定されたため %s で読み上げます", speaker, self._default)
+            speaker = self._default
+        return self._engine.synthesize(text, speaker, speed)

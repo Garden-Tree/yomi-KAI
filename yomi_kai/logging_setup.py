@@ -8,6 +8,19 @@ from pathlib import Path
 
 LOG_FORMAT = "[%(asctime)s] %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s"
 KEEP_LOG_FILES = 50
+# discord.py が受信したイベント・送受信したリクエストの中身（メッセージの本文を含む）を DEBUG で出すロガー
+PAYLOAD_LOGGERS = ("discord.gateway", "discord.http", "discord.webhook.async_")
+
+
+def set_text_logging(enabled: bool) -> None:
+    """メッセージの本文がログに残るかを切り替える（config.ini の LOG_READ_TEXT）。
+
+    無効なら、本文を含む discord.py の DEBUG ログ（Gateway のイベント・HTTP の送受信内容）を出さない。
+    yomi-KAI 自身の本文のログ（ReadSentence）は呼び出し側が ``Config.log_read_text`` で判断する。
+    """
+    level = logging.NOTSET if enabled else logging.INFO
+    for name in PAYLOAD_LOGGERS:
+        logging.getLogger(name).setLevel(level)
 
 
 def prune_logs(log_dir: Path, keep: int = KEEP_LOG_FILES) -> None:

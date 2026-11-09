@@ -4,7 +4,11 @@
 DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
 ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
-VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）を追加している。
+VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
+LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、RECORD_USAGE（使用量を記録するか、既定 False）、
+USAGE_DIR（使用量の保存先、既定 usage）、
+MAX_DICT_ENTRIES（辞書の登録数の上限、既定 0 = 無制限）、SPEAKER_ALLOWLIST（使える話者、既定は全話者）、
+BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）を追加している。
 """
 
 from __future__ import annotations
@@ -33,13 +37,28 @@ class Config:
     alert_webhook_url: str | None = None
     alert_after: int = 300
     voicevox_workers: int = 1
+    # True のときだけ、読み上げた本文を DEBUG ログ（ファイル）に出す
+    log_read_text: bool = False
+    # True のときだけ、月ごとの使用量（文字数・メッセージ数）を記録する
+    record_usage: bool = False
+    # 使用量の保存先
+    usage_dir: str = "usage"
+    # サーバーごとの辞書の登録数の上限（0 で無制限）
+    max_dict_entries: int = 0
+    # 使える話者の名前（空なら全話者）
+    speaker_allowlist: tuple[str, ...] = ()
+    # 利用を断るサーバーの ID を1行に1つ書いたファイル（無ければ何もブロックしない）
+    blocked_guilds_file: str = "settings/blocked_guilds.txt"
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
         return (
             f"Config(prefix={self.prefix!r}, afk_time={self.afk_time}, use_google_tts={self.use_google_tts}, "
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
-            f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers})"
+            f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
+            f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
+            f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
+            f"blocked_guilds_file={self.blocked_guilds_file!r})"
         )
 
 
@@ -126,6 +145,24 @@ def load_config(path: str | Path = "config.ini") -> Config:
             )
         if alert_after < 30:
             raise ConfigError(f"config.ini の `ALERT_AFTER` は 30 以上で指定してください（現在値: {alert_raw!r}）。")
+        log_read_text = _boolean(section, "LOG_READ_TEXT", False)
+        record_usage = _boolean(section, "RECORD_USAGE", False)
+        usage_dir = (section.get("USAGE_DIR") or "").strip() or "usage"
+        dict_raw = (section.get("MAX_DICT_ENTRIES") or "").strip() or "0"
+        try:
+            max_dict_entries = int(dict_raw)
+        except ValueError:
+            raise ConfigError(
+                f"config.ini の `MAX_DICT_ENTRIES` は整数で指定してください（0 で無制限、現在値: {dict_raw!r}）。"
+            ) from None
+        if max_dict_entries < 0:
+            raise ConfigError(
+                f"config.ini の `MAX_DICT_ENTRIES` は 0 以上で指定してください（現在値: {dict_raw!r}）。"
+            )
+        speaker_allowlist = tuple(
+            dict.fromkeys(name.strip() for name in (section.get("SPEAKER_ALLOWLIST") or "").split(",") if name.strip())
+        )
+        blocked_guilds_file = (section.get("BLOCKED_GUILDS_FILE") or "").strip() or "settings/blocked_guilds.txt"
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
         raise ConfigError(f"config.ini の読み込みに失敗しました: {e}") from None
@@ -142,4 +179,10 @@ def load_config(path: str | Path = "config.ini") -> Config:
         alert_webhook_url=alert_webhook_url,
         alert_after=alert_after,
         voicevox_workers=voicevox_workers,
+        log_read_text=log_read_text,
+        record_usage=record_usage,
+        usage_dir=usage_dir,
+        max_dict_entries=max_dict_entries,
+        speaker_allowlist=speaker_allowlist,
+        blocked_guilds_file=blocked_guilds_file,
     )

@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 1900
 
 
+def dict_full_notice(limit: int) -> str:
+    return f"辞書の登録数が上限（{limit}件）に達しています。不要な単語を削除してください"
+
+
 class DictionaryCog(commands.Cog):
     def __init__(self, bot: commands.Bot, config: Config, store: DictionaryStore) -> None:
         self.bot = bot
@@ -54,7 +58,12 @@ class DictionaryCog(commands.Cog):
     @dict_group.command(name="add", description="単語の読み方を辞書に登録します", ignore_extra=False)
     @app_commands.describe(word="単語", reading="読み方")
     async def dict_add(self, ctx: commands.Context, word: str, reading: str) -> None:
-        await asyncio.to_thread(self.store.add, ctx.guild.id, word, reading)
+        limit = self.config.max_dict_entries
+        added = await asyncio.to_thread(self.store.add, ctx.guild.id, word, reading, max_entries=limit)
+        if not added:
+            await reply(ctx, dict_full_notice(limit), private=True)
+            logger.info("辞書の登録数が上限（%d件）のため追加しませんでした (guild=%s)", limit, ctx.guild.id)
+            return
         embed = discord.Embed(title="辞書追加", color=EMBED_COLOR)
         embed.add_field(name="単語", value=f"{word}", inline=False)
         embed.add_field(name="読み", value=f"{reading}", inline=False)

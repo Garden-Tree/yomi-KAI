@@ -55,7 +55,41 @@ def test_voicevox_workers(tmp_path):
     assert load(tmp_path, "VOICEVOX_WORKERS = 4\n").voicevox_workers == 4
 
 
+def test_log_read_text(tmp_path):
+    assert load(tmp_path).log_read_text is False
+    assert load(tmp_path, "LOG_READ_TEXT = True\n").log_read_text is True
+    with pytest.raises(ConfigError, match="LOG_READ_TEXT"):
+        load(tmp_path, "LOG_READ_TEXT = maybe\n")
+
+
 @pytest.mark.parametrize("value", ["0", "9", "two"])
 def test_invalid_voicevox_workers(tmp_path, value):
     with pytest.raises(ConfigError, match="VOICEVOX_WORKERS"):
         load(tmp_path, f"VOICEVOX_WORKERS = {value}\n")
+
+
+def test_max_dict_entries(tmp_path):
+    assert load(tmp_path).max_dict_entries == 0
+    assert load(tmp_path, "MAX_DICT_ENTRIES = 50\n").max_dict_entries == 50
+    for value in ("-1", "many"):
+        with pytest.raises(ConfigError, match="MAX_DICT_ENTRIES"):
+            load(tmp_path, f"MAX_DICT_ENTRIES = {value}\n")
+
+
+def test_speaker_allowlist(tmp_path):
+    assert load(tmp_path).speaker_allowlist == ()
+    assert load(tmp_path, "SPEAKER_ALLOWLIST =\n").speaker_allowlist == ()
+    config = load(tmp_path, "SPEAKER_ALLOWLIST = ずんだもん, 春日部つむぎ ,,四国めたん（あまあま）,ずんだもん\n")
+    assert config.speaker_allowlist == ("ずんだもん", "春日部つむぎ", "四国めたん（あまあま）")
+
+
+def test_blocked_guilds_file(tmp_path):
+    assert load(tmp_path).blocked_guilds_file == "settings/blocked_guilds.txt"
+    assert load(tmp_path, "BLOCKED_GUILDS_FILE = data/block.txt\n").blocked_guilds_file == "data/block.txt"
+
+
+def test_record_usage(tmp_path):
+    assert load(tmp_path).record_usage is False
+    assert load(tmp_path, "RECORD_USAGE = True\n").record_usage is True
+    with pytest.raises(ConfigError, match="RECORD_USAGE"):
+        load(tmp_path, "RECORD_USAGE = maybe\n")

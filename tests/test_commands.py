@@ -16,7 +16,7 @@ from yomi_kai.main import YomiBot
 from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
-TOP_LEVEL = {"help", "c", "dc", "s", "voice", "speed", "announce", "dict", "sd"}
+TOP_LEVEL = {"help", "c", "dc", "s", "voice", "speed", "announce", "dict", "sd", "credit"}
 GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
 
 
@@ -125,3 +125,47 @@ def test_original_error_unwraps_hybrid_and_prefix_errors():
     assert original_error(wrapped) is cause
     error = commands.BadArgument("x")
     assert original_error(error) is error
+
+
+# --- credit ---
+
+
+class CreditEngine:
+    @property
+    def default_speaker(self):
+        return "ずんだもん"
+
+    def speakers(self):
+        return [
+            Speaker("ずんだもん", "stub", "VOICEVOX:ずんだもん"),
+            Speaker("ずんだもん（あまあま）", "stub", "VOICEVOX:ずんだもん"),
+            Speaker("四国めたん", "stub", "VOICEVOX:四国めたん"),
+            Speaker("ja-JP-Wavenet-A", "Google女声"),
+        ]
+
+    def synthesize(self, text, speaker, speed=1.0):
+        return b""
+
+
+@pytest.mark.parametrize("google", [False, True])
+def test_credit_lists_each_character_once(google):
+    from yomi_kai.cogs.misc import MiscCog
+
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", use_google_tts=google)
+    cog = MiscCog(SimpleNamespace(), config, CreditEngine())
+    ctx = FakeCtx(None)
+    asyncio.run(MiscCog.credit.callback(cog, ctx))
+    lines = ctx.sent[0][0].splitlines()
+    assert [line for line in lines if line.startswith("VOICEVOX:")] == ["VOICEVOX:ずんだもん", "VOICEVOX:四国めたん"]
+    assert any("https://voicevox.hiroshiba.jp/term/" in line for line in lines)
+    assert any("Google Cloud Text-to-Speech" in line for line in lines) is google
+
+
+def test_credit_follows_allowlist():
+    from yomi_kai.cogs.misc import credit_lines
+    from yomi_kai.tts import FilteredEngine
+
+    engine = FilteredEngine(CreditEngine(), ["四国めたん"])
+    assert [line for line in credit_lines(engine.speakers(), False) if line.startswith("VOICEVOX:")] == [
+        "VOICEVOX:四国めたん"
+    ]

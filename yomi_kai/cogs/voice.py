@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..session import AFK_NOTICE, GuildSession, SourceFactory
@@ -20,6 +21,7 @@ from ..settings import SettingsStore, resolve_voice, server_speaker
 from ..text import announce_text, build_read_text, describe_attachments, voice_transition
 from ..tts import TTSEngine
 from ..ui import DropdownView
+from ..usage import UsageStore
 from .common import EMBED_COLOR, SAVE_FAILED_NOTICE, reply
 
 logger = logging.getLogger(__name__)
@@ -34,12 +36,19 @@ class VoiceCog(commands.Cog):
         store: DictionaryStore,
         settings: SettingsStore,
         source_factory: SourceFactory,
+        *,
+        usage: UsageStore | None = None,
+        blocklist: GuildBlocklist | None = None,
     ) -> None:
         self.bot = bot
         self.config = config
         self.engine = engine
         self.store = store
         self.settings = settings
+        # 使用量の計測（None なら記録しない）
+        self.usage = usage
+        # 利用を断るサーバー（None ならブロックしない）
+        self.blocklist = blocklist
         self.available_speakers = frozenset(s.name for s in engine.speakers())
         self.source_factory = source_factory
         # guild.id -> GuildSession（サーバーごとの状態はここにだけ持つ）
@@ -114,6 +123,11 @@ class VoiceCog(commands.Cog):
         help_embed.add_field(
             name=f"{prefix}sd",
             value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
+            inline=False,
+        )
+        help_embed.add_field(
+            name=f"{prefix}credit",
+            value="読み上げ音声のクレジット（VOICEVOX:ずんだもん など）を表示します。",
             inline=False,
         )
         help_embed.add_field(name=f"{prefix}help", value="このヘルプを表示します。", inline=False)
@@ -222,6 +236,8 @@ class VoiceCog(commands.Cog):
         guild = message.guild
         if guild is None:
             return
+        if self.blocklist is not None and self.blocklist.is_blocked(guild.id):
+            return
 
         session = self.sessions.get(guild.id)
         if (
@@ -256,10 +272,14 @@ class VoiceCog(commands.Cog):
             settings, message.author.id, self.available_speakers, self.engine.default_speaker
         )
         if session.enqueue(read_msg, speaker, speed):
+            if self.usage is not None:
+                self.usage.record(guild.id, message.author.id, len(read_msg))
             logger.info(
                 "読み上げキューに追加しました (guild=%s, %d文字, %s, %s倍)", guild.id, len(read_msg), speaker, speed
             )
-            logger.debug("ReadSentence:%s", read_msg)
+            # 本文は LOG_READ_TEXT = True のときだけ記録する（既定では文字数だけ）
+            if self.config.log_read_text:
+                logger.debug("ReadSentence:%s", read_msg)
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -320,4 +340,7 @@ class VoiceCog(commands.Cog):
         text = announce_text(kind, member.display_name)
         speaker = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
         if session.enqueue(text, speaker, 1.0):
+            if self.usage is not None:
+                # 入退室はユーザーの使用量ではなく、サーバーの system_chars に数える
+                self.usage.record_system(member.guild.id, len(text))
             logger.info("入退室を読み上げキューに追加しました (guild=%s, %s)", member.guild.id, kind)
