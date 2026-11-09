@@ -20,7 +20,7 @@ from ..settings import DEFAULT_SPEED, SPEED_MAX, SPEED_MIN, SettingsStore
 from ..text import chunk_lines
 from ..tts import TTSEngine, find_speakers
 from ..ui import MAX_OPTIONS, DropdownView
-from .common import MANAGE_GUILD_NOTICE, SAVE_FAILED_NOTICE, original_error, reply
+from .common import SAVE_FAILED_NOTICE, guild_only_check, handle_command_error, invalid_command_notice, reply
 
 logger = logging.getLogger(__name__)
 
@@ -53,26 +53,19 @@ class SettingsCog(commands.Cog):
         self.settings = settings
         self.available_speakers = frozenset(s.name for s in engine.speakers())
 
-    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
-        # 引数の数・値が不正（例: y.speed 1 2、y.announce maybe）
-        if isinstance(error, commands.UserInputError):
-            if ctx.command is not None and ctx.command.qualified_name == "speed":
-                await reply(ctx, SPEED_INVALID_NOTICE, private=True)
-            else:
-                await self._invalid(ctx)
-            return
-        if isinstance(original_error(error), commands.MissingPermissions):
-            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
-            return
-        # 設定ファイルが壊れている・書き込めない場合（ログは Bot.on_command_error が出す）
-        if isinstance(original_error(error), (OSError, ValueError)):
-            await reply(ctx, SAVE_FAILED_NOTICE, private=True)
+    async def cog_check(self, ctx: commands.Context) -> bool:
+        return guild_only_check(ctx)
 
-    async def _invalid(self, ctx: commands.Context) -> None:
-        await reply(ctx, f"コマンドが間違っています。`{self.config.prefix}help`を参照してください", private=True)
+    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        # 引数の数・値が不正（例: y.speed 1 2、y.announce maybe）、設定ファイルが壊れている・書き込めない、など
+        if ctx.command is not None and ctx.command.qualified_name == "speed":
+            invalid_notice = SPEED_INVALID_NOTICE
+        else:
+            invalid_notice = invalid_command_notice(self.config.prefix)
+        await handle_command_error(ctx, error, invalid_notice=invalid_notice)
 
     @commands.hybrid_command(name="voice", description="自分の話者を設定します（名前を省略するとドロップダウンを表示）")
-    @commands.guild_only()
+    @app_commands.guild_only()
     @app_commands.describe(name="話者の名前（一部でも可）。list で一覧、reset で個人設定を解除")
     async def voice(self, ctx: commands.Context, *, name: str | None = None) -> None:
         guild_id = ctx.guild.id
@@ -145,7 +138,7 @@ class SettingsCog(commands.Cog):
     @commands.hybrid_command(
         name="announce", description="ボイスチャンネルへの入退室を読み上げるか設定します", ignore_extra=False
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     @app_commands.describe(state="on で読み上げる、off で読み上げない（省略すると現在の設定を表示）")
     async def announce(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
         guild_id = ctx.guild.id
@@ -173,7 +166,7 @@ class SettingsCog(commands.Cog):
     @commands.hybrid_command(
         name="readname", description="発言者の名前を読み上げるか設定します（サーバー全体）", ignore_extra=False
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     @app_commands.describe(state="on で名前を読み上げる、off で読み上げない（省略すると現在の設定を表示）")
     async def readname(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
         await self._toggle(ctx, state, "read_name", "名前の読み上げ")
@@ -183,7 +176,7 @@ class SettingsCog(commands.Cog):
         description="読み上げ待ちが溜まったときに速く読むか設定します（サーバー全体）",
         ignore_extra=False,
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     @app_commands.describe(state="on で混雑時に速く読む、off で常に設定どおりの速度（省略すると現在の設定を表示）")
     async def speedup(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
         await self._toggle(ctx, state, "queue_speedup", "混雑時の早読み")
@@ -193,7 +186,7 @@ class SettingsCog(commands.Cog):
         description="ほかの Bot・Webhook の発言も読み上げるか設定します（サーバー全体）",
         ignore_extra=False,
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     @commands.has_guild_permissions(manage_guild=True)
     @app_commands.describe(state="on で Bot の発言も読み上げる、off で読み上げない（省略すると現在の設定を表示）")
     async def readbots(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
@@ -202,7 +195,7 @@ class SettingsCog(commands.Cog):
     @commands.hybrid_command(
         name="speed", description="自分の読み上げ速度を設定します（0.5〜2.0倍）", ignore_extra=False
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     @app_commands.describe(value="0.5〜2.0 の倍率、または reset（省略すると現在の速度を表示）")
     async def speed(self, ctx: commands.Context, value: str | None = None) -> None:
         guild_id = ctx.guild.id

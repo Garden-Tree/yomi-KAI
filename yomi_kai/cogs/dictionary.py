@@ -17,7 +17,14 @@ from discord.ext import commands
 
 from ..config import Config
 from ..dictionary import DictionaryStore, InvalidEntryError, validate_entry
-from .common import EMBED_COLOR, MANAGE_GUILD_NOTICE, original_error, reply
+from .common import (
+    EMBED_COLOR,
+    guild_only_check,
+    handle_command_error,
+    invalid_command_notice,
+    reply,
+    reply_invalid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +34,8 @@ CHUNK_SIZE = 1900
 
 # 読み込める辞書ファイルの大きさの上限
 MAX_IMPORT_BYTES = 100 * 1024
+# 辞書ファイルが壊れている・書き込めないとき
+DICT_FAILED_NOTICE = "辞書の保存に失敗しました"
 
 
 def dict_full_notice(limit: int) -> str:
@@ -64,29 +73,23 @@ class DictionaryCog(commands.Cog):
         self.store = store
 
     async def cog_check(self, ctx: commands.Context) -> bool:
-        # サブコマンドにも確実に適用されるよう、Cog 単位でサーバー限定にする
-        if ctx.guild is None:
-            raise commands.NoPrivateMessage()
-        return True
+        return guild_only_check(ctx)
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
-        if isinstance(original_error(error), commands.MissingPermissions):
-            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
-            return
-        # 引数の数が合わない（例: y.dict add 単語、y.dict import でファイルを添付していない）
-        if isinstance(error, commands.UserInputError):
-            await self._invalid(ctx)
-
-    async def _invalid(self, ctx: commands.Context) -> None:
-        msg = f"コマンドが間違っています。`{self.config.prefix}dict help`を参照してください"
-        await reply(ctx, msg, private=True)
-        logger.info(msg)
+        # 引数の数が合わない（例: y.dict add 単語、y.dict import でファイルを添付していない）、
+        # 辞書ファイルが壊れている・書き込めない、など
+        await handle_command_error(
+            ctx,
+            error,
+            invalid_notice=invalid_command_notice(self.config.prefix, "dict help"),
+            failed_notice=DICT_FAILED_NOTICE,
+        )
 
     @commands.hybrid_group(name="dict", invoke_without_command=True, description="サーバーの読み上げ辞書を操作します")
-    @commands.guild_only()
+    @app_commands.guild_only()
     async def dict_group(self, ctx: commands.Context, *args: str) -> None:
         # サブコマンドに一致しなかった場合（引数なしを含む）。スラッシュでは直接呼ばれない
-        await self._invalid(ctx)
+        await reply_invalid(ctx, self.config.prefix, "dict help")
 
     @dict_group.command(name="add", description="単語の読み方を辞書に登録します", ignore_extra=False)
     @app_commands.describe(word="単語（50文字まで）", reading="読み方（100文字まで）")

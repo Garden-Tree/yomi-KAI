@@ -12,7 +12,7 @@ from discord.ext import commands
 from ..config import Config
 from ..text import chunk_lines, gen_sd_text
 from ..tts import Speaker, TTSEngine
-from .common import EMBED_COLOR, reply
+from .common import EMBED_COLOR, handle_command_error, invalid_command_notice, reply
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,7 @@ class MiscCog(commands.Cog):
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         # 引数が多すぎる（例: y.sd a b）
-        if isinstance(error, commands.UserInputError):
-            await self._invalid(ctx)
-
-    async def _invalid(self, ctx: commands.Context) -> None:
-        await reply(ctx, f"コマンドが間違っています。`{self.config.prefix}sd help`を参照してください", private=True)
+        await handle_command_error(ctx, error, invalid_notice=invalid_command_notice(self.config.prefix, "sd help"))
 
     @commands.hybrid_command(name="sd", description="「突然の死」風のテキストを出力します", ignore_extra=False)
     @app_commands.describe(word="囲む言葉（省略すると既定のメッセージ、help でヘルプを表示）")

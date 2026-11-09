@@ -184,3 +184,60 @@ def test_admin_commands_require_manage_guild(setup_result):
         assert any("has_guild_permissions" in q for q in predicates), name
     target = {p.name: p for p in setup_result["app"]["ignore"].get_command("add").parameters}["target"]
     assert target.type is discord.AppCommandOptionType.mentionable
+
+
+# --- Cog 共通のエラー処理・サーバー限定 ---
+
+
+def test_guild_only_cogs_reject_dm_for_every_command(setup_result):
+    # サーバー限定は Cog の cog_check に一本化している（サブコマンドもプレフィックス・スラッシュの両方で弾く）
+    prefix = setup_result["prefix"]
+    dm = SimpleNamespace(guild=None)
+    for name in GUILD_ONLY | SUBCOMMANDS:
+        cog = prefix[name].cog
+        if name in {"c", "dc", "s"}:
+            continue  # VoiceCog（別途サーバー限定）
+        with pytest.raises(commands.NoPrivateMessage):
+            asyncio.run(cog.cog_check(dm))
+        assert asyncio.run(cog.cog_check(SimpleNamespace(guild=object()))) is True
+
+
+@pytest.mark.parametrize("cog_name", ["DictionaryCog", "SettingsCog", "AdminCog"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        commands.CommandInvokeError(PermissionError("denied")),
+        commands.HybridCommandError(
+            app_commands.CommandInvokeError(SimpleNamespace(name="x"), ValueError("broken json"))
+        ),
+    ],
+)
+def test_file_errors_get_a_private_reply(setup_result, cog_name, error):
+    # 辞書・設定ファイルが壊れている・書き込めないときも返信する（スラッシュが「考え中…」のまま残らない）
+    from yomi_kai.cogs.common import SAVE_FAILED_NOTICE
+    from yomi_kai.cogs.dictionary import DICT_FAILED_NOTICE
+
+    cog = next(c.cog for c in setup_result["prefix"].values() if type(c.cog).__name__ == cog_name)
+    ctx = FakeCtx(object())
+    ctx.command = None
+    asyncio.run(cog.cog_command_error(ctx, error))
+    expected = DICT_FAILED_NOTICE if cog_name == "DictionaryCog" else SAVE_FAILED_NOTICE
+    assert ctx.sent == [(expected, {"ephemeral": True})]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("dict add", "コマンドが間違っています。`y.dict help`を参照してください"),
+        ("speed", "速度は0.5〜2.0の数値で指定してください"),
+        ("announce", "コマンドが間違っています。`y.help`を参照してください"),
+        ("ignore add", "コマンドが間違っています。`y.help`を参照してください"),
+        ("sd", "コマンドが間違っています。`y.sd help`を参照してください"),
+    ],
+)
+def test_user_input_errors_get_usage_hint(setup_result, command, expected):
+    cmd = setup_result["prefix"][command]
+    ctx = FakeCtx(None)
+    ctx.command = cmd
+    asyncio.run(cmd.cog.cog_command_error(ctx, commands.TooManyArguments()))
+    assert ctx.sent == [(expected, {"ephemeral": False})]
