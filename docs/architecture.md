@@ -183,7 +183,7 @@ Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-c
 
 1. `git merge --ff-only` でそのコミットへ更新（運用ディレクトリにローカル変更があれば何もせず失敗）。
 2. 動作中のコンテナのイメージを `yomi-kai:previous` として退避。
-3. `docker compose build --build-arg GIT_SHA=<短いハッシュ>` → `docker compose up -d`（Dockerfile の `ARG GIT_SHA` を `ENV YOMI_KAI_VERSION` にして、`y.status` にバージョンとして表示する。`ARG` はコードのコピーより後なので、値が変わっても再ビルドされるのは最後の層だけ）。ビルドに失敗した場合は git を元に戻して終了（旧版のコンテナは動き続ける）。
+3. `docker compose build --build-arg GIT_SHA=<短いハッシュ>` → `docker compose up -d`（Dockerfile の `ARG GIT_SHA` を `ENV YOMI_KAI_VERSION` にして、`y.status` にバージョンとして表示する。`ARG` はコードのコピーより後なので、値が変わっても再ビルドされるのは最後の層だけ）。ビルドに失敗した場合は git を元に戻して終了（旧版のコンテナは動き続ける）。ビルドしたイメージが動作中のコンテナと同じ（動作中のコミットやそれより古いコミットを指定した場合）なら、コンテナを入れ替えずに成功で終了。`up -d` が失敗した場合は 6. のロールバックを行う。
 4. 起動確認: 最大120秒、コンテナのログに `Launch complete!` が出るのを待つ。
 5. 成功なら、タグのないイメージと7日以上使っていないビルドキャッシュを削除。直近のキャッシュは残すので、コードだけの変更なら apt / pip / VOICEVOX のダウンロードはやり直さない。
 6. 失敗なら直近のログを出力し、git を直前のコミットに戻して `yomi-kai:previous` で再起動（ロールバック）。デプロイは失敗として GitHub に表示される。
