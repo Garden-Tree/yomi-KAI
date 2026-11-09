@@ -172,6 +172,13 @@ def test_accepted_message_is_metered_after_truncation(tmp_path):
     assert guild["users"] == {str(USER_ID): {"chars": expected, "messages": 1}}
 
 
+def test_usage_is_not_recorded_without_store(tmp_path):
+    engine = FakeEngine()
+    cog = make_cog(tmp_path, make_config(), engine)
+    asyncio.run(read_message(cog, engine, "あいうえお"))
+    assert not (tmp_path / "usage").exists()
+
+
 def test_set_text_logging_silences_discord_payload_logs():
     try:
         set_text_logging(False)

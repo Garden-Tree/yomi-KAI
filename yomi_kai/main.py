@@ -85,8 +85,10 @@ class YomiBot(commands.Bot):
         self.settings = settings
         # 起動した時刻（y.status の稼働時間）
         self.started_at = time.time()
-        # 使用量の計測（常に有効。本文は保存しない）
-        self.usage = usage if usage is not None else UsageStore(config.usage_dir)
+        # 使用量の計測（RECORD_USAGE = True のときだけ。本文は保存しない）
+        if usage is None and config.record_usage:
+            usage = UsageStore(config.usage_dir)
+        self.usage: UsageStore | None = usage
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._usage_task: asyncio.Task[None] | None = None
         # 利用を断るサーバー。ブロックされたサーバーのコマンド・スラッシュコマンドはグローバルチェックで無視する
@@ -108,7 +110,8 @@ class YomiBot(commands.Bot):
 
     def _start_monitoring(self) -> None:
         self._heartbeat_task = asyncio.create_task(heartbeat_loop(self.is_gateway_alive), name="yomi-kai-heartbeat")
-        self._usage_task = asyncio.create_task(self.usage.run_flusher(), name="yomi-kai-usage")
+        if self.usage is not None:
+            self._usage_task = asyncio.create_task(self.usage.run_flusher(), name="yomi-kai-usage")
         if self.alerter is not None:
             # 起動直後に接続できない状態が続いた場合も通知できるよう、接続完了までは切断中として扱う
             self.alerter.disconnected()
@@ -134,6 +137,8 @@ class YomiBot(commands.Bot):
             await self.alerter.close()
         # Cog の取り外し（読み上げの停止）まで済んでから、残りの使用量を書き込む
         await super().close()
+        if self.usage is None:
+            return
         try:
             await self.usage.aflush()
         except Exception:

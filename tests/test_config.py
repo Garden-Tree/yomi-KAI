@@ -91,3 +91,10 @@ def test_blocked_guilds_file(tmp_path):
 def test_speaker_allowlist_accepts_japanese_separators(tmp_path):
     config = load(tmp_path, "SPEAKER_ALLOWLIST = ずんだもん、 春日部つむぎ ，四国めたん,雨晴はう\n")
     assert config.speaker_allowlist == ("ずんだもん", "春日部つむぎ", "四国めたん", "雨晴はう")
+
+
+def test_record_usage(tmp_path):
+    assert load(tmp_path).record_usage is False
+    assert load(tmp_path, "RECORD_USAGE = True\n").record_usage is True
+    with pytest.raises(ConfigError, match="RECORD_USAGE"):
+        load(tmp_path, "RECORD_USAGE = maybe\n")

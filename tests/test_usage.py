@@ -9,6 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from yomi_kai.config import Config
+from yomi_kai.dictionary import DictionaryStore
+from yomi_kai.main import YomiBot
+from yomi_kai.settings import SettingsStore
 from yomi_kai.usage import UsageStore, format_report, main
 
 GUILD_A = 111
@@ -211,3 +215,26 @@ def test_cli_does_not_import_discord_or_voicevox(tmp_path):
     root = Path(__file__).parents[1]
     result = subprocess.run([sys.executable, "-c", code, str(tmp_path)], capture_output=True, cwd=root)
     assert result.returncode == 0, result.stderr
+
+
+def make_bot(tmp_path, **kwargs):
+    config = Config(
+        discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", usage_dir=str(tmp_path / "usage"), **kwargs
+    )
+    return YomiBot(config, object(), DictionaryStore(tmp_path / "dict"), SettingsStore(tmp_path / "settings"))
+
+
+def test_bot_does_not_record_usage_by_default(tmp_path):
+    bot = make_bot(tmp_path)
+    assert bot.usage is None
+    asyncio.run(bot.close())
+    assert not (tmp_path / "usage").exists()
+
+
+def test_bot_records_usage_when_enabled(tmp_path):
+    bot = make_bot(tmp_path, record_usage=True)
+    assert isinstance(bot.usage, UsageStore)
+    bot.usage.record(GUILD_A, ALICE, 7)
+    asyncio.run(bot.close())
+    month = datetime.now().strftime("%Y-%m")
+    assert read_json(tmp_path / "usage" / f"{month}.json")["guilds"][str(GUILD_A)]["chars"] == 7

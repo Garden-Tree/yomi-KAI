@@ -136,7 +136,8 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 * `tests/test_voice_cog.py` が、既定の設定で偽のエンジンを使って `on_message` → `enqueue` → 合成を通し、DEBUG までのすべてのログに本文が含まれないことを確かめています。
 
 ### 3.1 使用量の計測（`usage.py`）
-* 読み上げを受け付けた（`session.enqueue` が True を返した）発言ごとに、`UsageStore.record(guild_id, user_id, 文字数)` がメモリ上の増分に足します。文字数は `MAX_READ_LENGTH` で切り詰めたあとの読み上げテキストの長さです。入退室の読み上げはユーザーの使用量に含めず、`record_system()` でサーバーの `system_chars` に数えます。本文は保存しません。上限や制限はなく、常に有効です。
+* 読み上げを受け付けた（`session.enqueue` が True を返した）発言ごとに、`UsageStore.record(guild_id, user_id, 文字数)` がメモリ上の増分に足します。文字数は `MAX_READ_LENGTH` で切り詰めたあとの読み上げテキストの長さです。入退室の読み上げはユーザーの使用量に含めず、`record_system()` でサーバーの `system_chars` に数えます。本文は保存しません。上限や制限はありません。
+* 既定では無効です（`RECORD_USAGE = False`）。無効のとき `YomiBot.usage` は `None` で、`UsageStore` を作らず、書き込みのタスクも動かしません。`VoiceCog` は `usage` が `None` なら記録しません。
 * 形式は `usage/{YYYY-MM}.json` に `{"guilds": {"<guild_id>": {"chars", "messages", "system_chars", "users": {"<user_id>": {"chars", "messages"}}}}}`（`USAGE_DIR` で保存先を変更可）。月はサーバーのローカル時刻（Docker は `TZ=Asia/Tokyo`）で決めます。
 * `record()` は I/O をしません。`YomiBot` のバックグラウンドタスクが60秒ごとに、増分があれば `asyncio.to_thread(flush)` で書き込み、終了時（`close()` で Cog を外したあと）にも書き込みます。`flush()` はファイルを読んで増分を足し、`jsonfile.write_json_atomic` で書き込むので、再起動しても月の途中から数え続けられます。書き込みに失敗した増分は戻して次回また書き込みます。
 * 壊れたファイル（JSON として読めない・形が違う）は上書きせず `{name}.corrupt-{日時}` に名前を変え、その月を新しく数え直します。
@@ -164,7 +165,7 @@ Python環境の構築やコマンド操作をユーザーに強いることな�
 
 ### 4.2 自己ホスト向けのDocker版
 Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-compose` での一発構築を提供しています。
-軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`)、各種ログ(`log/`)、月ごとの使用量(`usage/`)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
+軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`)、各種ログ(`log/`)、月ごとの使用量(`usage/`、`RECORD_USAGE = True` の場合)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
 
 * **一般ユーザーでの実行**: Bot はイメージ内で作成した `yomi`（uid/gid 1000）ユーザーで動きます。ボリュームのディレクトリは Docker がホスト側に root 所有で作るため、`docker-entrypoint.sh` が root で起動して `dict/` `settings/` `log/` `usage/` のうち所有者が違うものだけ `chown` し、`setpriv --reuid --regid --init-groups` で権限を落としてから Bot を起動します（既存の環境でも手作業は不要）。`config.ini`（読み取り専用マウント）が `yomi` で読めない権限の場合だけは、警告を出して root のまま起動します。
 * **ヘルスチェック**: `HEALTHCHECK` で `python -m yomi_kai.health` を60秒ごとに実行し（起動後120秒は猶予）、ハートビートが途絶えるとコンテナが `unhealthy` になります（`restart: unless-stopped` は unhealthy では再起動しないため、状態の可視化が目的。長時間の切断は Webhook で通知）。
