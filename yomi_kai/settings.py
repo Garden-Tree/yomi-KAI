@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .jsonfile import read_json_object, write_json_atomic
+from .jsonfile import FailedLoads, read_json_object, write_json_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -211,9 +211,11 @@ def resolve_voice(
 
 
 class SettingsStore:
-    def __init__(self, directory: str | Path = "settings") -> None:
+    def __init__(self, directory: str | Path = "settings", *, failed_loads: FailedLoads | None = None) -> None:
         self._dir = Path(directory)
         self._cache: dict[int, GuildSettings] = {}
+        # 読み込みに失敗したサーバー（しばらくは読み直さず空の設定を返す）
+        self._failed = failed_loads if failed_loads is not None else FailedLoads()
         self._lock = threading.Lock()
 
     def path_for(self, guild_id: int) -> Path:
@@ -224,20 +226,33 @@ class SettingsStore:
         return self._cache.get(guild_id)
 
     def get(self, guild_id: int) -> GuildSettings:
-        """サーバーの設定を返す（初回のみファイルを読む）。読み込みに失敗した場合は空の設定。"""
+        """サーバーの設定を返す（初回のみファイルを読む）。読み込みに失敗した場合は空の設定。
+
+        壊れたファイルはキャッシュせずに読み直すが、発言のたびに読み直さないよう、失敗してから
+        しばらく（``FailedLoads`` の間隔）は読み直さずに空の設定を返す。
+        """
         cached = self._cache.get(guild_id)
         if cached is not None:
             return cached
+        if self._failed.is_waiting(guild_id):
+            return EMPTY_SETTINGS
         with self._lock:
             cached = self._cache.get(guild_id)
             if cached is not None:
                 return cached
-            try:
-                settings = GuildSettings.from_json(read_json_object(self.path_for(guild_id)))
-            except (OSError, ValueError):
-                # 壊れたファイルはキャッシュせず、次回また読み直す
-                logger.exception("設定ファイルの読み込みに失敗しました: %s", self.path_for(guild_id))
+            if self._failed.is_waiting(guild_id):
                 return EMPTY_SETTINGS
+            path = self.path_for(guild_id)
+            try:
+                settings = GuildSettings.from_json(read_json_object(path))
+            except (OSError, ValueError):
+                # トレースバックはファイルが変わったときだけ出す（同じ壊れたファイルで出し続けない）
+                if self._failed.record(guild_id, path):
+                    logger.exception("設定ファイルの読み込みに失敗しました: %s", path)
+                else:
+                    logger.debug("設定ファイルは引き続き読み込めません: %s", path)
+                return EMPTY_SETTINGS
+            self._failed.clear(guild_id)
             self._cache[guild_id] = settings
             return settings
 
@@ -246,6 +261,8 @@ class SettingsStore:
         cached = self._cache.get(guild_id)
         if cached is not None:
             return cached
+        if self._failed.is_waiting(guild_id):
+            return EMPTY_SETTINGS
         return await asyncio.to_thread(self.get, guild_id)
 
     # --- 書き込み ---
@@ -261,6 +278,7 @@ class SettingsStore:
             if changed:
                 write_json_atomic(self.path_for(guild_id), raw)
             self._cache[guild_id] = GuildSettings.from_json(raw)
+            self._failed.clear(guild_id)
             return changed
 
     def set_guild_speaker(self, guild_id: int, speaker: str) -> None:

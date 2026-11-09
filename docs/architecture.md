@@ -102,7 +102,7 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 
 * `y.c` のドロップダウン → サーバーの話者（`speaker`）。`y.voice` のドロップダウン → 操作したユーザーの話者（`y.voice 名前` はコマンドを打ったユーザーの話者）。`y.announce on|off` → 入退室の読み上げ（`announce_voice`、未設定なら true）。`y.speed` → コマンドを打ったユーザーの速度（0.5〜2.0）。`y.readname` / `y.speedup` / `y.readbots` → `read_name` / `queue_speedup` / `read_bots`（`set_flag`）。`y.ignore add|del` → `ignored_users` / `ignored_roles`。`y.autojoin add|del` → `autojoin`。`reset` で解除し、ユーザーの設定が空になったらエントリごと削除します。
 * 書き込みはイベントループから `asyncio.to_thread` 経由で行い、読み込みは `aget()`（キャッシュがあれば I/O なし）を使います。
-* 壊れたファイルは読み込み時は空の設定として扱い（ログに出力）、書き込み時は上書きせずに例外を送出します（辞書と同じ方針）。未知のキーは書き込み時もそのまま残します。
+* 壊れたファイルは読み込み時は空の設定として扱い（ログに出力）、書き込み時は上書きせずに例外を送出します（辞書と同じ方針）。発言のたびに読み直さないよう、読み込みに失敗してから60秒は読み直さずに空の設定を返し（`jsonfile.FailedLoads`）、トレースバックはファイルが変わったときだけ出します。未知のキーは書き込み時もそのまま残します。
 * **話者の決定順（`resolve_voice`）**: ユーザー個人の話者 → サーバーの話者 → エンジンの既定話者。保存された話者が現在のエンジンで利用できない場合（Google TTS を無効にした、モデルを減らした等）はその段を飛ばします。速度はユーザーの設定、なければ 1.0（範囲外の値は 0.5〜2.0 に丸める）。
 
 ### 2.4 コマンド（hybrid コマンド）
@@ -140,7 +140,7 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 * 既定では無効です（`RECORD_USAGE = False`）。無効のとき `YomiBot.usage` は `None` で、`UsageStore` を作らず、書き込みのタスクも動かしません。`VoiceCog` は `usage` が `None` なら記録しません。
 * 形式は `usage/{YYYY-MM}.json` に `{"guilds": {"<guild_id>": {"chars", "messages", "system_chars", "users": {"<user_id>": {"chars", "messages"}}}}}`（`USAGE_DIR` で保存先を変更可）。月はサーバーのローカル時刻（Docker は `TZ=Asia/Tokyo`）で決めます。
 * `record()` は I/O をしません。`YomiBot` のバックグラウンドタスクが60秒ごとに、増分があれば `asyncio.to_thread(flush)` で書き込み、終了時（`close()` で Cog を外したあと）にも書き込みます。`flush()` はファイルを読んで増分を足し、`jsonfile.write_json_atomic` で書き込むので、再起動しても月の途中から数え続けられます。書き込みに失敗した増分は戻して次回また書き込みます。
-* 壊れたファイル（JSON として読めない・形が違う）は上書きせず `{name}.corrupt-{日時}` に名前を変え、その月を新しく数え直します。
+* 壊れたファイル（JSON として読めない・形が違う）は上書きせず `{name}.corrupt-{日時}` に名前を変え、その月を新しく数え直します。権限などで読めないだけの場合（`OSError`）は名前を変えず、増分を残して次回また書き込みます。
 * `python -m yomi_kai.usage [YYYY-MM] [--dir DIR]` はサーバー数・利用ユーザー数（重複を除く）・合計の文字数と件数・文字数の多いサーバー上位10件を表示します。`discord` / `voicevox_core` を import しません。
 
 ### 3.2 ブラックリスト（`blocklist.py`）

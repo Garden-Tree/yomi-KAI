@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
+from collections.abc import Callable, Hashable
 from pathlib import Path
 from typing import Any
 
 # 書き込んだファイルの権限（mkstemp は 0600 で作るため、通常のファイルと同じにそろえる）
 FILE_MODE = 0o644
+# 読み込みに失敗したファイルを読み直すまでの秒数
+FAILED_LOAD_RETRY = 60.0
 
 
 def read_json_object(path: Path) -> dict[str, Any]:
@@ -62,3 +66,40 @@ def write_json_atomic(path: Path, data: Any) -> None:
             pass
         raise
     _fsync_directory(directory)
+
+
+def _mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+class FailedLoads:
+    """読み込みに失敗したファイルの記録（負のキャッシュ）。
+
+    壊れたファイルを発言のたびに読み直し、トレースバックをログに出し続けないようにする。
+    失敗してから ``retry`` 秒は読み直さず、読み直しても失敗した場合はファイルが変わっていなければ
+    トレースバックを出さない。
+    """
+
+    def __init__(self, retry: float = FAILED_LOAD_RETRY, clock: Callable[[], float] = time.monotonic) -> None:
+        self._retry = retry
+        self._clock = clock
+        # キー -> (次に読み直す時刻, 失敗したときのファイルの更新時刻)
+        self._entries: dict[Hashable, tuple[float, int | None]] = {}
+
+    def is_waiting(self, key: Hashable) -> bool:
+        """最近失敗したばかりで、まだ読み直さない場合は True。"""
+        entry = self._entries.get(key)
+        return entry is not None and self._clock() < entry[0]
+
+    def record(self, key: Hashable, path: Path) -> bool:
+        """失敗を記録する。初めての失敗、または前回の失敗からファイルが変わっていれば True（詳細をログに出す）。"""
+        mtime = _mtime_ns(path)
+        previous = self._entries.get(key)
+        self._entries[key] = (self._clock() + self._retry, mtime)
+        return previous is None or previous[1] != mtime
+
+    def clear(self, key: Hashable) -> None:
+        self._entries.pop(key, None)
