@@ -91,11 +91,19 @@ class SynthesisStats:
 
 
 def find_ffmpeg() -> str:
-    """ffmpeg の実行ファイル: ./lib/ffmpeg.exe → ./ffmpeg.exe → PATH 上の ffmpeg の順に探す。"""
+    """ffmpeg の実行ファイル: ./lib/ffmpeg.exe → ./ffmpeg.exe → PATH 上の ffmpeg の順に探す。
+
+    どこにも見つからなければ ``"ffmpeg"`` を返す（:func:`ffmpeg_available` で確かめられる）。
+    """
     for candidate in ("./lib/ffmpeg.exe", "./ffmpeg.exe"):
         if os.path.isfile(candidate):
             return candidate
     return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def ffmpeg_available(path: str) -> bool:
+    """``path`` の ffmpeg が実際に存在するか（ファイルとして、または PATH 上に）。"""
+    return os.path.isfile(path) or shutil.which(path) is not None
 
 
 def ffmpeg_source_factory(ffmpeg_path: str) -> SourceFactory:
@@ -166,6 +174,8 @@ class GuildSession:
         self._wakeup = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         self._afk_task: asyncio.Task[None] | None = None
+        # start と close を直列にする（切断の途中で接続し直したセッションを、遅れて切断しないように）
+        self._lifecycle = asyncio.Lock()
         # AFK タイマーで自動切断したときに呼ばれる（自動接続の再接続を少し待つために使う）
         self.on_auto_close: Callable[[], None] | None = None
 
@@ -176,8 +186,8 @@ class GuildSession:
 
     @property
     def pending(self) -> int:
-        """合成を始めていないかたまりが残っているメッセージの数。"""
-        return len(self._messages)
+        """合成を始めていないかたまりが残っているメッセージの数（スキップしたものは数えない）。"""
+        return sum(1 for message in self._messages if self._is_live(message))
 
     @property
     def is_busy(self) -> bool:
@@ -188,15 +198,23 @@ class GuildSession:
 
     # --- 接続・切断 ---
     async def start(self, voice_client: VoiceClientLike, text_channel: MessageableLike) -> None:
-        """接続（または移動）直後に呼ぶ。ワーカーを起動し、AFKタイマーを張る。"""
-        self.voice_client = voice_client
-        self.text_channel = text_channel
-        if self._worker is None or self._worker.done():
-            self._worker = asyncio.create_task(self._run_worker(), name=f"yomi-kai-worker-{self.guild_id}")
-        self._reset_afk_timer()
+        """接続（または移動）直後に呼ぶ。ワーカーを起動し、AFKタイマーを張る。
+
+        切断（``close``）の途中なら、それが終わってから始める。
+        """
+        async with self._lifecycle:
+            self.voice_client = voice_client
+            self.text_channel = text_channel
+            if self._worker is None or self._worker.done():
+                self._worker = asyncio.create_task(self._run_worker(), name=f"yomi-kai-worker-{self.guild_id}")
+            self._reset_afk_timer()
 
     async def close(self, notice: str | None = None) -> None:
         """ワーカー停止・合成中のタスクの取り消し・キュー破棄・再生停止・切断をまとめて行う。複数回呼んでも安全。"""
+        async with self._lifecycle:
+            await self._close(notice)
+
+    async def _close(self, notice: str | None) -> None:
         voice_client, text_channel = self.voice_client, self.text_channel
         self.voice_client = None
         self.text_channel = None
@@ -252,14 +270,18 @@ class GuildSession:
         self._reset_afk_timer()
         return True
 
+    def _live_messages(self) -> list[_Message]:
+        """スキップされていないメッセージ（再生中 → 合成中・合成済み → 合成待ちの順、重複なし）。"""
+        candidates = [] if self._playing is None else [self._playing]
+        candidates += [job.message for job in self._pipeline]
+        candidates += self._messages
+        live = [message for message in candidates if self._is_live(message)]
+        return list({id(message): message for message in live}.values())
+
     def _current_message(self) -> _Message | None:
         """いま再生中、または次に再生する（合成を待っている）メッセージ。"""
-        if self._playing is not None:
-            return self._playing
-        for job in self._pipeline:
-            if self._is_live(job.message):
-                return job.message
-        return None
+        live = self._live_messages()
+        return live[0] if live else None
 
     def skip(self) -> bool:
         """いま読み上げている（または合成中の）メッセージの残りをすべて飛ばして次へ進む。対象がなければ False。"""
@@ -277,12 +299,7 @@ class GuildSession:
 
     def skip_all(self) -> int:
         """再生中・合成中・未再生のものをすべて読み上げ中止する。中止したメッセージの数を返す。"""
-        messages = []
-        if self._playing is not None and self._is_live(self._playing):
-            messages.append(self._playing)
-        messages += [job.message for job in self._pipeline if self._is_live(job.message)]
-        messages += [m for m in self._messages if self._is_live(m)]
-        dropped = len({id(m) for m in messages})
+        dropped = len(self._live_messages())
 
         self._epoch += 1  # 合成中・合成済みのかたまりは再生前に世代で弾く
         self._messages.clear()
@@ -308,7 +325,7 @@ class GuildSession:
                 continue
             if message.next_chunk == 0 and message.speedup:
                 # 速度はメッセージの読み始めに決め、残りのかたまりも同じ速度で読む
-                message.speed = backlog_speed(message.speed, len(self._messages))
+                message.speed = backlog_speed(message.speed, self.pending)
             text = message.chunks[message.next_chunk]
             message.next_chunk += 1
             task = asyncio.create_task(self._synthesize(text, message.speaker, message.speed))
@@ -324,39 +341,48 @@ class GuildSession:
     async def _run_worker(self) -> None:
         try:
             while True:
-                self._fill_pipeline()
-                if not self._pipeline:
-                    self._wakeup.clear()
-                    await self._wakeup.wait()
-                    continue
-
-                job = self._pipeline[0]
-                await asyncio.wait([job.task])  # タスクの失敗・取り消しはここでは送出されない
-                self._pipeline.popleft()
-                message = job.message
-                if not self._is_live(message) or job.task.cancelled():
-                    continue
-                error = job.task.exception()
-                if self.stats is not None:
-                    if error is None:
-                        self.stats.success()
-                    else:
-                        self.stats.failure()
-                if error is not None:
-                    logger.error("音声合成に失敗しました (guild=%s)", self.guild_id, exc_info=error)
-                    if not message.failure_notified:  # 1メッセージにつき1回だけ通知する
-                        message.failure_notified = True
-                        await self._notify(SYNTH_FAILED_NOTICE)
-                    continue
-
-                self._playing = message
                 try:
-                    self._fill_pipeline()  # 再生中に次のかたまりを合成しておく
-                    await self._play(job.task.result())
-                finally:
-                    self._playing = None
+                    await self._step()
+                except Exception:
+                    # 1件の失敗でワーカーが止まると、以降の読み上げも AFK の自動切断も止まってしまう
+                    logger.exception("読み上げの処理中にエラーが発生しました (guild=%s)", self.guild_id)
+                    await asyncio.sleep(0)
         finally:
             self._cancel_pipeline()
+
+    async def _step(self) -> None:
+        """次のかたまりを1つ処理する（再生するものがなければ、キューに積まれるまで待つ）。"""
+        self._fill_pipeline()
+        if not self._pipeline:
+            self._wakeup.clear()
+            await self._wakeup.wait()
+            return
+
+        job = self._pipeline[0]
+        await asyncio.wait([job.task])  # タスクの失敗・取り消しはここでは送出されない
+        self._pipeline.popleft()
+        message = job.message
+        if not self._is_live(message) or job.task.cancelled():
+            return
+        error = job.task.exception()
+        if self.stats is not None:
+            if error is None:
+                self.stats.success()
+            else:
+                self.stats.failure()
+        if error is not None:
+            logger.error("音声合成に失敗しました (guild=%s)", self.guild_id, exc_info=error)
+            if not message.failure_notified:  # 1メッセージにつき1回だけ通知する
+                message.failure_notified = True
+                await self._notify(SYNTH_FAILED_NOTICE)
+            return
+
+        self._playing = message
+        try:
+            self._fill_pipeline()  # 再生中に次のかたまりを合成しておく
+            await self._play(job.task.result())
+        finally:
+            self._playing = None
 
     async def _play(self, wav: bytes) -> None:
         voice_client = self.voice_client
@@ -372,9 +398,10 @@ class GuildSession:
             with contextlib.suppress(RuntimeError):  # ループ終了後に呼ばれた場合
                 loop.call_soon_threadsafe(finished.set)
 
-        # FFmpeg プロセスは再生直前にだけ生成する
-        source = self._source_factory(wav)
+        source = None
         try:
+            # FFmpeg プロセスは再生直前にだけ生成する（ffmpeg が無いなどで起動できなければここで失敗する）
+            source = self._source_factory(wav)
             voice_client.play(source, after=after)
         except Exception:
             logger.exception("再生の開始に失敗しました (guild=%s)", self.guild_id)

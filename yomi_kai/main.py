@@ -197,10 +197,15 @@ class YomiBot(commands.Bot):
         from .cogs.misc import MiscCog
         from .cogs.settings import SettingsCog
         from .cogs.voice import VoiceCog
-        from .session import ffmpeg_source_factory, find_ffmpeg
+        from .session import ffmpeg_available, ffmpeg_source_factory, find_ffmpeg
 
         ffmpeg_path = find_ffmpeg()
         logger.debug("ffmpeg: %s", ffmpeg_path)
+        if not ffmpeg_available(ffmpeg_path):
+            logger.warning(
+                "ffmpeg が見つかりません。./lib/ffmpeg.exe・./ffmpeg.exe に置くか、PATH に追加してください"
+                "（このままでは読み上げを再生できません）"
+            )
         await self.add_cog(
             VoiceCog(
                 self,
