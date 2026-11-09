@@ -16,7 +16,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
-from ..dictionary import DictionaryStore
+from ..dictionary import DictionaryStore, InvalidEntryError, validate_entry
 from .common import EMBED_COLOR, MANAGE_GUILD_NOTICE, original_error, reply
 
 logger = logging.getLogger(__name__)
@@ -50,8 +50,9 @@ def parse_dictionary_import(data: bytes) -> dict[str, str]:
         raise ValueError('{"単語": "読み", ...} の形式で書いてください')
     entries: dict[str, str] = {}
     for word, reading in parsed.items():
-        if not isinstance(reading, str) or not word.strip() or not reading.strip():
-            raise ValueError(f"「{word}」の読みが正しくありません（単語と読みはどちらも空でない文字列にしてください）")
+        if not isinstance(reading, str):
+            raise ValueError(f"「{word}」の読みが正しくありません（読みは文字列にしてください）")
+        validate_entry(word, reading)  # 空・長すぎる単語や読み（InvalidEntryError は ValueError）
         entries[word] = reading
     return entries
 
@@ -88,10 +89,15 @@ class DictionaryCog(commands.Cog):
         await self._invalid(ctx)
 
     @dict_group.command(name="add", description="単語の読み方を辞書に登録します", ignore_extra=False)
-    @app_commands.describe(word="単語", reading="読み方")
+    @app_commands.describe(word="単語（50文字まで）", reading="読み方（100文字まで）")
     async def dict_add(self, ctx: commands.Context, word: str, reading: str) -> None:
         limit = self.config.max_dict_entries
-        added = await asyncio.to_thread(self.store.add, ctx.guild.id, word, reading, max_entries=limit)
+        try:
+            added = await asyncio.to_thread(self.store.add, ctx.guild.id, word, reading, max_entries=limit)
+        except InvalidEntryError as e:
+            await reply(ctx, f"辞書に登録できません: {e}", private=True)
+            logger.info("辞書に登録できない単語・読みのため追加しませんでした (guild=%s): %s", ctx.guild.id, e)
+            return
         if not added:
             await reply(ctx, dict_full_notice(limit), private=True)
             logger.info("辞書の登録数が上限（%d件）のため追加しませんでした (guild=%s)", limit, ctx.guild.id)
