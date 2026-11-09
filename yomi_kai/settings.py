@@ -265,6 +265,12 @@ class SettingsStore:
             return EMPTY_SETTINGS
         return await asyncio.to_thread(self.get, guild_id)
 
+    def evict(self, guild_id: int) -> None:
+        """サーバーのキャッシュを捨てる（Bot がサーバーから外れたとき用。ファイルはそのまま残す）。"""
+        with self._lock:
+            self._cache.pop(guild_id, None)
+            self._failed.clear(guild_id)
+
     # --- 書き込み ---
     def _update(self, guild_id: int, mutate: Callable[[dict[str, Any]], bool]) -> bool:
         """ファイルを読み、``mutate`` で書き換え、変更があれば保存する。変更の有無を返す。

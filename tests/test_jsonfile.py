@@ -121,3 +121,15 @@ def test_aget_skips_thread_while_waiting(tmp_path, monkeypatch, kind):
 
     monkeypatch.setattr(asyncio, "to_thread", fail)
     asyncio.run(store.aget(1))
+
+
+@pytest.mark.parametrize("kind", ["dict", "settings"])
+def test_evict_drops_only_that_guild(tmp_path, kind):
+    store = dict(_stores(tmp_path, Clock()))[kind]
+    for guild_id in (1, 2):
+        store.get(guild_id)
+    assert store.get_cached(1) is not None and store.get_cached(2) is not None
+    store.evict(1)
+    store.evict(3)  # 読み込んでいないサーバーでも例外にしない
+    assert store.get_cached(1) is None
+    assert store.get_cached(2) is not None

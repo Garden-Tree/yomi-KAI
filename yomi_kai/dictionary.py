@@ -106,6 +106,12 @@ class DictionaryStore:
             return compile_dictionary({})
         return await asyncio.to_thread(self.get, guild_id)
 
+    def evict(self, guild_id: int) -> None:
+        """サーバーのキャッシュを捨てる（Bot がサーバーから外れたとき用。ファイルはそのまま残す）。"""
+        with self._lock:
+            self._cache.pop(guild_id, None)
+            self._failed.clear(guild_id)
+
     def words(self, guild_id: int) -> dict[str, str]:
         """登録済みの単語一覧（コピー）を返す。"""
         return dict(self.get(guild_id).words)
