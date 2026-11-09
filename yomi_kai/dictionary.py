@@ -13,16 +13,41 @@ import logging
 import threading
 from pathlib import Path
 
-from .jsonfile import read_json_object, write_json_atomic
+from .jsonfile import FailedLoads, read_json_object, write_json_atomic
 from .text import WordDictionary, compile_dictionary
 
 logger = logging.getLogger(__name__)
 
+# 登録できる単語・読みの長さ（文字数）の上限
+MAX_WORD_LENGTH = 50
+MAX_READING_LENGTH = 100
+
+
+class InvalidEntryError(ValueError):
+    """登録できない単語・読み（空、長すぎる）。メッセージはそのまま利用者に表示できる。"""
+
+
+def validate_entry(word: str, reading: str) -> None:
+    """単語と読みを登録できるか確かめる。できなければ理由を添えて :class:`InvalidEntryError`。
+
+    空の単語はすべての文字の間に一致してしまい、サーバー全体の読み上げが壊れるため受け付けない。
+    """
+    if not word.strip():
+        raise InvalidEntryError("単語が空です")
+    if not reading.strip():
+        raise InvalidEntryError(f"「{word}」の読みが空です")
+    if len(word) > MAX_WORD_LENGTH:
+        raise InvalidEntryError(f"単語は{MAX_WORD_LENGTH}文字までです")
+    if len(reading) > MAX_READING_LENGTH:
+        raise InvalidEntryError(f"「{word}」の読みが長すぎます（{MAX_READING_LENGTH}文字まで）")
+
 
 class DictionaryStore:
-    def __init__(self, directory: str | Path = "dict") -> None:
+    def __init__(self, directory: str | Path = "dict", *, failed_loads: FailedLoads | None = None) -> None:
         self._dir = Path(directory)
         self._cache: dict[int, WordDictionary] = {}
+        # 読み込みに失敗したサーバー（しばらくは読み直さず空の辞書を返す）
+        self._failed = failed_loads if failed_loads is not None else FailedLoads()
         self._lock = threading.Lock()
 
     def path_for(self, guild_id: int) -> Path:
@@ -30,28 +55,45 @@ class DictionaryStore:
 
     # --- 読み込み ---
     def _read_words(self, guild_id: int) -> dict[str, str]:
-        """ファイルから辞書を読む。ファイルが無ければ空。壊れていれば例外を送出する。"""
-        data = read_json_object(self.path_for(guild_id))
-        return {str(k): str(v) for k, v in data.items()}
+        """ファイルから辞書を読む。ファイルが無ければ空。壊れていれば例外を送出する（読みが文字列でない場合を含む）。"""
+        path = self.path_for(guild_id)
+        data = read_json_object(path)
+        for word, reading in data.items():
+            if not isinstance(reading, str):
+                raise ValueError(f"{path} の「{word}」の読みが文字列ではありません")
+        return data
 
     def get_cached(self, guild_id: int) -> WordDictionary | None:
         return self._cache.get(guild_id)
 
     def get(self, guild_id: int) -> WordDictionary:
-        """コンパイル済み辞書を返す（初回のみファイルを読む）。読み込みに失敗した場合は空の辞書。"""
+        """コンパイル済み辞書を返す（初回のみファイルを読む）。読み込みに失敗した場合は空の辞書。
+
+        壊れたファイルはキャッシュせずに読み直すが、発言のたびに読み直さないよう、失敗してから
+        しばらく（``FailedLoads`` の間隔）は読み直さずに空の辞書を返す。
+        """
         cached = self._cache.get(guild_id)
         if cached is not None:
             return cached
+        if self._failed.is_waiting(guild_id):
+            return compile_dictionary({})
         with self._lock:
             cached = self._cache.get(guild_id)
             if cached is not None:
                 return cached
+            if self._failed.is_waiting(guild_id):
+                return compile_dictionary({})
+            path = self.path_for(guild_id)
             try:
                 compiled = compile_dictionary(self._read_words(guild_id))
             except (OSError, ValueError):
-                # 壊れたファイルはキャッシュせず、次回また読み直す
-                logger.exception("辞書ファイルの読み込みに失敗しました: %s", self.path_for(guild_id))
+                # トレースバックはファイルが変わったときだけ出す（同じ壊れたファイルで出し続けない）
+                if self._failed.record(guild_id, path):
+                    logger.exception("辞書ファイルの読み込みに失敗しました: %s", path)
+                else:
+                    logger.debug("辞書ファイルは引き続き読み込めません: %s", path)
                 return compile_dictionary({})
+            self._failed.clear(guild_id)
             self._cache[guild_id] = compiled
             return compiled
 
@@ -60,39 +102,53 @@ class DictionaryStore:
         cached = self._cache.get(guild_id)
         if cached is not None:
             return cached
+        if self._failed.is_waiting(guild_id):
+            return compile_dictionary({})
         return await asyncio.to_thread(self.get, guild_id)
+
+    def evict(self, guild_id: int) -> None:
+        """サーバーのキャッシュを捨てる（Bot がサーバーから外れたとき用。ファイルはそのまま残す）。"""
+        with self._lock:
+            self._cache.pop(guild_id, None)
+            self._failed.clear(guild_id)
 
     def words(self, guild_id: int) -> dict[str, str]:
         """登録済みの単語一覧（コピー）を返す。"""
         return dict(self.get(guild_id).words)
 
-    # --- 書き込み ---
-    def _write_words(self, guild_id: int, words: dict[str, str]) -> None:
-        """一時ファイルに書いてから os.replace で差し替える（書き込み途中で壊れない）。"""
-        write_json_atomic(self.path_for(guild_id), words)
+    # --- 書き込み（一時ファイルに書いてから os.replace で差し替える。書き込み途中で壊れない） ---
+    def _replace_cache(self, guild_id: int, words: dict[str, str]) -> None:
+        """書き込んだ内容でキャッシュを差し替える（ロックを持った状態で呼ぶ）。"""
+        self._cache[guild_id] = compile_dictionary(words)
+        self._failed.clear(guild_id)
 
     def add(self, guild_id: int, word: str, reading: str, *, max_entries: int = 0) -> bool:
         """単語を登録する（登録済みなら読みを更新する）。
 
+        単語・読みが空、または長すぎる場合は :class:`InvalidEntryError` を送出する。
         ``max_entries`` が 1 以上で、未登録の単語を追加すると件数がそれを超える場合は何もせず False を返す
         （登録済みの単語の読みの更新はいつでもできる）。0 なら無制限。
         """
+        validate_entry(word, reading)
         with self._lock:
             words = self._read_words(guild_id)
             if max_entries > 0 and word not in words and len(words) >= max_entries:
                 return False
             words[word] = reading
-            self._write_words(guild_id, words)
+            write_json_atomic(self.path_for(guild_id), words)
             # キャッシュを破棄せず差し替える。破棄すると次の発言でファイル読み込みの待ちが発生し、
             # その間に届いた発言と読み上げ順が入れ替わる可能性がある
-            self._cache[guild_id] = compile_dictionary(words)
+            self._replace_cache(guild_id, words)
             return True
 
     def merge(self, guild_id: int, entries: dict[str, str], *, max_entries: int = 0) -> tuple[int, int, int]:
         """複数の単語をまとめて登録する（同じ単語は ``entries`` の読みで上書き）。(追加, 更新, 上限で飛ばした) を返す。
 
         ``max_entries`` が 1 以上なら、新しい単語は上限に収まる分だけ（``entries`` の順に）追加する。
+        登録できない単語・読みが含まれていれば、何も変えずに :class:`InvalidEntryError` を送出する。
         """
+        for word, reading in entries.items():
+            validate_entry(word, reading)
         with self._lock:
             words = self._read_words(guild_id)
             added = updated = skipped = 0
@@ -107,8 +163,8 @@ class DictionaryStore:
                     words[word] = reading
                     added += 1
             if added or updated:
-                self._write_words(guild_id, words)
-                self._cache[guild_id] = compile_dictionary(words)
+                write_json_atomic(self.path_for(guild_id), words)
+                self._replace_cache(guild_id, words)
             return added, updated, skipped
 
     def remove(self, guild_id: int, word: str) -> bool:
@@ -118,6 +174,6 @@ class DictionaryStore:
             if word not in words:
                 return False
             del words[word]
-            self._write_words(guild_id, words)
-            self._cache[guild_id] = compile_dictionary(words)
+            write_json_atomic(self.path_for(guild_id), words)
+            self._replace_cache(guild_id, words)
             return True

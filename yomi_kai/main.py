@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import signal
 import sys
 import time
 from collections.abc import Iterable
@@ -78,7 +79,13 @@ class YomiBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
-        super().__init__(command_prefix=config.prefix, intents=intents, help_command=None)
+        # コマンドは利用者の入力を返すことがある（例: y.sd @everyone）ので、メンションで通知しない
+        super().__init__(
+            command_prefix=config.prefix,
+            intents=intents,
+            help_command=None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
         self.config = config
         self.engine = engine
         self.store = store
@@ -94,6 +101,8 @@ class YomiBot(commands.Bot):
         # 利用を断るサーバー。ブロックされたサーバーのコマンド・スラッシュコマンドはグローバルチェックで無視する
         self.blocklist = GuildBlocklist(config.blocked_guilds_file)
         self._blocklist_task: asyncio.Task[None] | None = None
+        # SIGTERM を受けて始めた終了処理
+        self._close_task: asyncio.Task[None] | None = None
         self.add_check(self._not_blocked)
         # on_disconnect で True、on_ready / on_resumed で False（is_ready() は切断中も True のままのことがある）
         self._gateway_down = True
@@ -187,7 +196,28 @@ class YomiBot(commands.Bot):
             except Exception:
                 logger.exception("ブロックリストの確認に失敗しました")
 
+    # --- 終了（docker stop の SIGTERM） ---
+    def install_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> bool:
+        """SIGTERM で ``close()`` するようにする。登録できなければ（Windows など）False。
+
+        Docker では Python が PID 1 で動くため、ハンドラが無いと SIGTERM が無視され、docker stop が
+        10秒後に SIGKILL して終了処理（読み上げの停止・使用量の書き込み）が行われない。
+        """
+        try:
+            loop.add_signal_handler(signal.SIGTERM, self._on_sigterm)
+        except (NotImplementedError, RuntimeError, AttributeError, ValueError):
+            logger.debug("SIGTERM のハンドラを登録できませんでした（この環境では使えません）")
+            return False
+        return True
+
+    def _on_sigterm(self) -> None:
+        if self._close_task is not None:
+            return
+        logger.info("SIGTERM を受け取ったため終了します")
+        self._close_task = asyncio.create_task(self.close(), name="yomi-kai-close")
+
     async def setup_hook(self) -> None:
+        self.install_signal_handlers(asyncio.get_running_loop())
         self._start_monitoring()
         await asyncio.to_thread(self.blocklist.reload_if_changed)
         self._blocklist_task = asyncio.create_task(self._watch_blocklist(), name="yomi-kai-blocklist")
@@ -197,10 +227,15 @@ class YomiBot(commands.Bot):
         from .cogs.misc import MiscCog
         from .cogs.settings import SettingsCog
         from .cogs.voice import VoiceCog
-        from .session import ffmpeg_source_factory, find_ffmpeg
+        from .session import ffmpeg_available, ffmpeg_source_factory, find_ffmpeg
 
         ffmpeg_path = find_ffmpeg()
         logger.debug("ffmpeg: %s", ffmpeg_path)
+        if not ffmpeg_available(ffmpeg_path):
+            logger.warning(
+                "ffmpeg が見つかりません。./lib/ffmpeg.exe・./ffmpeg.exe に置くか、PATH に追加してください"
+                "（このままでは読み上げを再生できません）"
+            )
         await self.add_cog(
             VoiceCog(
                 self,

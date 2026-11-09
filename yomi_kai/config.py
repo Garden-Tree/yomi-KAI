@@ -86,6 +86,37 @@ def _boolean(section: configparser.SectionProxy, key: str, default: bool) -> boo
         ) from None
 
 
+def _int(
+    section: configparser.SectionProxy,
+    key: str,
+    default: int | None,
+    lo: int,
+    hi: int | None = None,
+    kind: str = "整数",
+) -> int:
+    """整数のキーを読む。``default`` が None なら必須、それ以外は未設定・空なら ``default``。
+
+    ``lo`` 〜 ``hi`` の範囲（両端を含む、``hi`` が None なら上限なし）でなければ ConfigError。
+    """
+    if default is None:
+        raw = _required(section, key).strip()
+    else:
+        raw = (section.get(key) or "").strip()
+        if not raw:
+            return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError(f"config.ini の `{key}` は{kind}で指定してください（現在値: {raw!r}）。") from None
+    if value < lo or (hi is not None and value > hi):
+        if hi is not None:
+            expected = f"{lo}〜{hi}"
+        else:
+            expected = "正の整数" if lo == 1 else f"{lo} 以上"
+        raise ConfigError(f"config.ini の `{key}` は {expected} で指定してください（現在値: {raw!r}）。")
+    return value
+
+
 def load_config(path: str | Path = "config.ini") -> Config:
     """config.ini を読み込んで :class:`Config` を返す。不備があれば :class:`ConfigError` を送出する。"""
     path = Path(path)
@@ -105,69 +136,23 @@ def load_config(path: str | Path = "config.ini") -> Config:
         use_google_tts = _boolean(section, "USE_GOOGLE_TTS", False)
         google_api_key = _required(section, "GOOGLE_API_KEY") if use_google_tts else section.get("GOOGLE_API_KEY")
         prefix = _required(section, "PREFIX")
-        afk_raw = _required(section, "AFK_TIME")
-        try:
-            afk_time = int(afk_raw)
-        except ValueError:
-            raise ConfigError(
-                f"config.ini の `AFK_TIME` は秒数（整数）で指定してください（現在値: {afk_raw!r}）。"
-            ) from None
-        if afk_time <= 0:
-            raise ConfigError(f"config.ini の `AFK_TIME` は正の整数で指定してください（現在値: {afk_raw!r}）。")
+        afk_time = _int(section, "AFK_TIME", None, 1, None, "秒数（整数）")
         sd_msg = _required(section, "SD_MSG")
         load_all = _boolean(section, "VOICEVOX_LOAD_ALL_MODELS", False)
-        max_raw = section.get("MAX_READ_LENGTH", "100")
-        try:
-            max_read_length = int(max_raw)
-        except ValueError:
-            raise ConfigError(
-                f"config.ini の `MAX_READ_LENGTH` は整数で指定してください（0 で無制限、現在値: {max_raw!r}）。"
-            ) from None
-        if max_read_length < 0:
-            raise ConfigError(f"config.ini の `MAX_READ_LENGTH` は 0 以上で指定してください（現在値: {max_raw!r}）。")
+        max_read_length = _int(section, "MAX_READ_LENGTH", 100, 0, None, "整数（0 で無制限）")
         alert_webhook_url = (section.get("ALERT_WEBHOOK_URL") or "").strip() or None
         if alert_webhook_url is not None and not alert_webhook_url.startswith("https://"):
             # 値そのものは秘密情報なので表示しない
             raise ConfigError(
                 "config.ini の `ALERT_WEBHOOK_URL` は https:// で始まる Webhook の URL を指定してください。"
             )
-        alert_raw = (section.get("ALERT_AFTER") or "").strip() or "300"
-        try:
-            alert_after = int(alert_raw)
-        except ValueError:
-            raise ConfigError(
-                f"config.ini の `ALERT_AFTER` は秒数（整数）で指定してください（現在値: {alert_raw!r}）。"
-            ) from None
-        workers_raw = (section.get("VOICEVOX_WORKERS") or "").strip() or "1"
-        try:
-            voicevox_workers = int(workers_raw)
-        except ValueError:
-            raise ConfigError(
-                f"config.ini の `VOICEVOX_WORKERS` は整数で指定してください（1〜8、現在値: {workers_raw!r}）。"
-            ) from None
-        if not 1 <= voicevox_workers <= 8:
-            raise ConfigError(
-                f"config.ini の `VOICEVOX_WORKERS` は 1〜8 で指定してください（現在値: {workers_raw!r}）。"
-            )
-        if alert_after < 30:
-            raise ConfigError(f"config.ini の `ALERT_AFTER` は 30 以上で指定してください（現在値: {alert_raw!r}）。")
+        alert_after = _int(section, "ALERT_AFTER", 300, 30, None, "秒数（整数）")
+        voicevox_workers = _int(section, "VOICEVOX_WORKERS", 1, 1, 8)
         log_read_text = _boolean(section, "LOG_READ_TEXT", False)
         record_usage = _boolean(section, "RECORD_USAGE", False)
         usage_dir = (section.get("USAGE_DIR") or "").strip() or "usage"
-        dict_raw = (section.get("MAX_DICT_ENTRIES") or "").strip() or "0"
-        try:
-            max_dict_entries = int(dict_raw)
-        except ValueError:
-            raise ConfigError(
-                f"config.ini の `MAX_DICT_ENTRIES` は整数で指定してください（0 で無制限、現在値: {dict_raw!r}）。"
-            ) from None
-        if max_dict_entries < 0:
-            raise ConfigError(
-                f"config.ini の `MAX_DICT_ENTRIES` は 0 以上で指定してください（現在値: {dict_raw!r}）。"
-            )
-        speaker_allowlist = tuple(
-            dict.fromkeys(name.strip() for name in split_names(section.get("SPEAKER_ALLOWLIST") or "") if name.strip())
-        )
+        max_dict_entries = _int(section, "MAX_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
+        speaker_allowlist = tuple(dict.fromkeys(split_names(section.get("SPEAKER_ALLOWLIST") or "")))
         blocked_guilds_file = (section.get("BLOCKED_GUILDS_FILE") or "").strip() or "settings/blocked_guilds.txt"
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など

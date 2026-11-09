@@ -25,7 +25,7 @@ def test_with_name():
 def test_read_name_setting_default_off_and_saved(tmp_path):
     assert GuildSettings.from_json({}).read_name is False
     store = SettingsStore(tmp_path)
-    store.set_read_name(GUILD_ID, True)
+    store.set_flag(GUILD_ID, "read_name", True)
     assert store.get(GUILD_ID).read_name is True
     with open(store.path_for(GUILD_ID), encoding="UTF-8") as f:
         assert json.load(f)["read_name"] is True
@@ -34,7 +34,7 @@ def test_read_name_setting_default_off_and_saved(tmp_path):
 def test_on_message_prefixes_name_after_truncation(tmp_path):
     engine = FakeEngine()
     cog = make_cog(tmp_path, make_config(max_read_length=3), engine)
-    cog.settings.set_read_name(GUILD_ID, True)
+    cog.settings.set_flag(GUILD_ID, "read_name", True)
     clock = [1000.0]
     cog._clock = lambda: clock[0]
 

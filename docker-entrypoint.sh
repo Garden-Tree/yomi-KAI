@@ -16,8 +16,9 @@ fi
 
 for dir in /app/dict /app/settings /app/log /app/usage; do
     mkdir -p "$dir"
-    # 所有者が違うものだけ直す（毎回すべてを書き換えない）
-    find "$dir" \( ! -user "$APP_UID" -o ! -group "$APP_GID" \) -exec chown "$APP_UID:$APP_GID" {} +
+    # 所有者が違うものだけ直す（毎回すべてを書き換えない）。
+    # find はシンボリックリンクをたどらず、chown -h はリンクそのものを変える（リンク先のファイルを root で書き換えない）
+    find "$dir" \( ! -user "$APP_UID" -o ! -group "$APP_GID" \) -exec chown -h "$APP_UID:$APP_GID" {} +
 done
 
 drop() {

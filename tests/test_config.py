@@ -98,3 +98,30 @@ def test_record_usage(tmp_path):
     assert load(tmp_path, "RECORD_USAGE = True\n").record_usage is True
     with pytest.raises(ConfigError, match="RECORD_USAGE"):
         load(tmp_path, "RECORD_USAGE = maybe\n")
+
+
+def test_empty_optional_ints_use_defaults(tmp_path):
+    # 任意の整数キーは、空欄なら既定値（MAX_READ_LENGTH も他のキーと同じ扱い）
+    config = load(tmp_path, "MAX_READ_LENGTH =\nALERT_AFTER =\nVOICEVOX_WORKERS =\nMAX_DICT_ENTRIES =\n")
+    assert config.max_read_length == 100
+    assert config.alert_after == 300
+    assert config.voicevox_workers == 1
+    assert config.max_dict_entries == 0
+
+
+@pytest.mark.parametrize(
+    ("line", "key"),
+    [
+        ("MAX_READ_LENGTH = -1", "MAX_READ_LENGTH"),
+        ("MAX_READ_LENGTH = long", "MAX_READ_LENGTH"),
+        ("AFK_TIME = 0", "AFK_TIME"),
+        ("AFK_TIME = soon", "AFK_TIME"),
+        ("AFK_TIME =", "AFK_TIME"),  # 必須
+    ],
+)
+def test_invalid_ints(tmp_path, line, key):
+    path = tmp_path / "config.ini"
+    text = BASE.replace("AFK_TIME = 1800", line) if key == "AFK_TIME" else BASE + line + "\n"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(ConfigError, match=key):
+        load_config(path)

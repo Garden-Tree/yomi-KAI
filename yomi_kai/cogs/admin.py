@@ -16,10 +16,9 @@ from discord.ext import commands
 
 from ..config import Config
 from ..settings import MAX_AUTOJOIN, MAX_IGNORED, SettingsStore
-from .common import MANAGE_GUILD_NOTICE, SAVE_FAILED_NOTICE, original_error, reply
+from .common import guild_only_check, handle_command_error, invalid_command_notice, reply, reply_invalid
 
 logger = logging.getLogger(__name__)
-
 
 
 def autojoin_to_remove(mapping: Mapping[int, int], current_voice_id: int | None) -> int | None:
@@ -48,29 +47,18 @@ class AdminCog(commands.Cog):
         self.settings = settings
 
     async def cog_check(self, ctx: commands.Context) -> bool:
-        if ctx.guild is None:
-            raise commands.NoPrivateMessage()
-        return True
+        return guild_only_check(ctx)
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
-        error = original_error(error)
-        if isinstance(error, commands.MissingPermissions):
-            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
-        elif isinstance(error, commands.UserInputError):
-            await self._invalid(ctx)
-        elif isinstance(error, (OSError, ValueError)):
-            await reply(ctx, SAVE_FAILED_NOTICE, private=True)
-
-    async def _invalid(self, ctx: commands.Context) -> None:
-        await reply(ctx, f"コマンドが間違っています。`{self.config.prefix}help`を参照してください", private=True)
+        await handle_command_error(ctx, error, invalid_notice=invalid_command_notice(self.config.prefix))
 
     # --- 読み上げないユーザー・ロール ---
     @commands.hybrid_group(
         name="ignore", invoke_without_command=True, description="読み上げないユーザー・ロールを設定します"
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     async def ignore_group(self, ctx: commands.Context, *args: str) -> None:
-        await self._invalid(ctx)
+        await reply_invalid(ctx, self.config.prefix)
 
     @ignore_group.command(name="add", description="ユーザーまたはロールの発言を読み上げないようにします")
     @commands.has_guild_permissions(manage_guild=True)
@@ -120,9 +108,9 @@ class AdminCog(commands.Cog):
         invoke_without_command=True,
         description="ボイスチャンネルに人が入ったら自動で接続する設定をします",
     )
-    @commands.guild_only()
+    @app_commands.guild_only()
     async def autojoin_group(self, ctx: commands.Context, *args: str) -> None:
-        await self._invalid(ctx)
+        await reply_invalid(ctx, self.config.prefix)
 
     @autojoin_group.command(
         name="add", description="いまいるボイスチャンネルに人が入ったら、このチャンネルを読み上げるよう自動接続します"

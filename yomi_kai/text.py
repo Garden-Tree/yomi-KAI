@@ -19,18 +19,36 @@ class WordDictionary:
     words: Mapping[str, str] = field(default_factory=dict)
     pattern: re.Pattern[str] | None = None
 
-    def apply(self, text: str) -> str:
+    def apply(self, text: str, limit: int | None = None) -> str:
+        """辞書の単語を読みに置き換える。``limit`` を指定すると、結果がその文字数に達した時点で打ち切る。"""
         if self.pattern is None:
             return text
-        return self.pattern.sub(lambda m: self.words[m.group(0)], text)
+        if limit is None:
+            return self.pattern.sub(lambda m: self.words[m.group(0)], text)
+        # 短い単語を長い読みにする登録があっても、置換後の文字列が際限なく長くならないようにする
+        parts: list[str] = []
+        size = 0
+        position = 0
+        for match in self.pattern.finditer(text):
+            piece = text[position : match.start()] + self.words[match.group(0)]
+            parts.append(piece)
+            size += len(piece)
+            position = match.end()
+            if size >= limit:
+                return "".join(parts)[:limit]
+        parts.append(text[position:])
+        return "".join(parts)[:limit]
 
 
 EMPTY_DICTIONARY = WordDictionary()
 
 
 def compile_dictionary(words: Mapping[str, str]) -> WordDictionary:
-    """単語→読みの辞書から置換用の正規表現を作る。長い単語を優先してマッチさせる。"""
-    words = dict(words)
+    """単語→読みの辞書から置換用の正規表現を作る。長い単語を優先してマッチさせる。
+
+    空や空白だけの単語は無視する（空の単語は文字と文字のあいだのすべてにマッチしてしまうため）。
+    """
+    words = {word: reading for word, reading in words.items() if word.strip()}
     if not words:
         return EMPTY_DICTIONARY
     pattern = re.compile("|".join(re.escape(k) for k in sorted(words, key=len, reverse=True)))
@@ -56,6 +74,38 @@ _UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])(_{1,2})([^_\n]+?)\1(?![A-Za-z0-9
 
 CODE_BLOCK_TEXT = "コード省略"
 TRUNCATED_SUFFIX = " 以下略"
+# 辞書を当てる前の本文の上限（Discord のメッセージの上限）と、辞書を当てたあとの上限。
+# 最終的な長さは MAX_READ_LENGTH（build_read_text の max_length）で切り詰める
+MAX_INPUT_LENGTH = 4000
+MAX_EXPANDED_LENGTH = 20000
+
+# メンション・サーバー絵文字（辞書を当てるあいだ、記号1文字に置き換えて守る）
+_PROTECTED_RE = re.compile(r"<@[!&]?[0-9]+>|<#[0-9]+>|<a?:\w+:[0-9]+>")
+# 守った部分の目印に使う私用領域の文字（補助私用面 A。本文の上限より十分多い）
+_PLACEHOLDER_BASE = 0xF0000
+_PLACEHOLDER_RE = re.compile("[\U000f0000-\U000ffffd]")
+
+
+def _protect(text: str) -> tuple[str, list[str]]:
+    """メンション・サーバー絵文字を目印の1文字に置き換える（``<@123>`` の数字などが辞書で壊れないように）。"""
+    tokens: list[str] = []
+
+    def keep(match: re.Match[str]) -> str:
+        tokens.append(match.group(0))
+        return chr(_PLACEHOLDER_BASE + len(tokens) - 1)
+
+    return _PROTECTED_RE.sub(keep, text), tokens
+
+
+def _restore(text: str, tokens: Sequence[str]) -> str:
+    if not tokens:
+        return text
+
+    def put_back(match: re.Match[str]) -> str:
+        index = ord(match.group(0)) - _PLACEHOLDER_BASE
+        return tokens[index] if index < len(tokens) else match.group(0)
+
+    return _PLACEHOLDER_RE.sub(put_back, text)
 
 
 def replace_code(text: str) -> str:
@@ -122,11 +172,14 @@ def build_read_text(
     処理順: コード → 辞書置換 → URL → ネタバレ → メンション → サーバー絵文字 → マークダウン
     → 添付ファイルの説明（``attachments``、:func:`describe_attachments` の結果）を末尾に追加 → 文字数制限。
     コードを最初に処理するのは、コード内の文字列が辞書や URL として読まれないようにするため。
+    辞書置換のあいだ、メンション・サーバー絵文字（``<@123>`` など）は辞書で壊れないように守っておく。
+    辞書置換の前の本文は ``MAX_INPUT_LENGTH``、置換後は ``MAX_EXPANDED_LENGTH`` 文字で打ち切る。
     ``max_length`` が正なら、添付ファイルの説明も含めた整形後の文字数で切り詰める（0 以下で無制限）。
     """
-    text = replace_code(text)
+    text = replace_code(text[:MAX_INPUT_LENGTH])
     if dictionary is not None:
-        text = dictionary.apply(text)
+        text, protected = _protect(text)
+        text = _restore(dictionary.apply(text, limit=MAX_EXPANDED_LENGTH), protected)
     text = replace_urls(text)
     text = replace_spoilers(text)
     text = replace_mentions(text, user_name=user_name, role_name=role_name, channel_name=channel_name)

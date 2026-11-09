@@ -7,13 +7,48 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 import unicodedata
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+# 同期の合成（Google TTS など）を動かすスレッドの数。設定・辞書のファイル I/O が使う既定の executor を
+# 合成で埋めてしまわないよう、合成には専用の executor を使う
+SYNTHESIS_THREADS = 8
+_executor: ThreadPoolExecutor | None = None
+_executor_lock = threading.Lock()
+
+
+def synthesis_executor() -> ThreadPoolExecutor:
+    """同期の合成専用の executor（初めて使うときに作る）。"""
+    global _executor
+    with _executor_lock:
+        if _executor is None:
+            _executor = ThreadPoolExecutor(max_workers=SYNTHESIS_THREADS, thread_name_prefix="yomi-kai-tts")
+        return _executor
+
+
+async def run_in_synthesis_thread[R](func: Callable[..., R], *args: Any) -> R:
+    """``func(*args)`` を合成専用のスレッドで実行して待つ。"""
+    return await asyncio.get_running_loop().run_in_executor(synthesis_executor(), func, *args)
+
+
+async def synthesize_async(engine: TTSEngine, text: str, speaker: str, speed: float = 1.0) -> bytes:
+    """``engine`` で非同期に合成する。
+
+    ``synthesize_async`` を持つエンジンはそれを使う（取り消すと合成も取り消される）。持たないエンジンは
+    同期の ``synthesize`` を合成専用のスレッドで呼ぶ（この場合、取り消しても実行中の合成は最後まで動く）。
+    """
+    method = getattr(engine, "synthesize_async", None)
+    if method is not None:
+        return await method(text, speaker, speed)
+    return await run_in_synthesis_thread(engine.synthesize, text, speaker, speed)
 
 
 @dataclass(frozen=True)
@@ -59,6 +94,8 @@ def find_speakers(query: str, names: Iterable[str]) -> list[str]:
 class TTSEngine(Protocol):
     """音声合成エンジン。``synthesize`` はブロッキングで、WAV のバイト列を返す。
 
+    ``synthesize_async`` は同じ合成のコルーチン版で、取り消し（``Task.cancel``）に応じる。
+    読み上げ（``GuildSession``）はこちらを :func:`synthesize_async` 経由で使う。
     ``speed`` は話速の倍率（1.0 が標準）。
     """
 
@@ -68,6 +105,8 @@ class TTSEngine(Protocol):
     def speakers(self) -> list[Speaker]: ...
 
     def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes: ...
+
+    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0) -> bytes: ...
 
 
 class CompositeEngine:
@@ -99,13 +138,21 @@ class CompositeEngine:
     def speakers(self) -> list[Speaker]:
         return list(self._speakers)
 
-    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+    def _route(self, speaker: str) -> tuple[TTSEngine, str]:
         engine = self._owner.get(speaker)
         if engine is None:
             logger.warning("未知の話者 %s が指定されたため %s で読み上げます", speaker, self._default)
             speaker = self._default
             engine = self._owner[speaker]
+        return engine, speaker
+
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+        engine, speaker = self._route(speaker)
         return engine.synthesize(text, speaker, speed)
+
+    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+        engine, speaker = self._route(speaker)
+        return await synthesize_async(engine, text, speaker, speed)
 
 
 class FilteredEngine:
@@ -136,8 +183,14 @@ class FilteredEngine:
     def speakers(self) -> list[Speaker]:
         return list(self._speakers)
 
-    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+    def _allowed(self, speaker: str) -> str:
         if speaker not in self._names:
             logger.warning("許可されていない話者 %s が指定されたため %s で読み上げます", speaker, self._default)
-            speaker = self._default
-        return self._engine.synthesize(text, speaker, speed)
+            return self._default
+        return speaker
+
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+        return self._engine.synthesize(text, self._allowed(speaker), speed)
+
+    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+        return await synthesize_async(self._engine, text, self._allowed(speaker), speed)

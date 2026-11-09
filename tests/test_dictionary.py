@@ -118,6 +118,66 @@ def test_corrupt_file_reads_as_empty_but_mutations_fail(tmp_path):
     assert path.read_text(encoding="UTF-8") == "{not json"
 
 
+@pytest.mark.parametrize("content", ['{"a": {"x": 1}}', '{"a": null}', '{"a": 1}', '{"a": ["あ"]}'])
+def test_non_string_readings_are_corrupt(tmp_path, content):
+    # 文字列以外の読みを文字列にして読み込まない（壊れたファイルとして扱い、上書きもしない）
+    path = tmp_path / f"{GUILD}.json"
+    path.write_text(content, encoding="UTF-8")
+    store = DictionaryStore(tmp_path)
+    assert store.words(GUILD) == {}
+    with pytest.raises(ValueError):
+        store.add(GUILD, "b", "び")
+    assert path.read_text(encoding="UTF-8") == content
+
+
+# --- 登録できない単語・読み ---
+
+INVALID_ENTRIES = [
+    ("", "あ"),
+    ("   ", "あ"),
+    ("　", "あ"),
+    ("a", ""),
+    ("a", " \n"),
+    ("x" * 51, "あ"),
+    ("a", "あ" * 101),
+]
+
+
+@pytest.mark.parametrize(("word", "reading"), INVALID_ENTRIES)
+def test_add_rejects_invalid_entries(tmp_path, word, reading):
+    from yomi_kai.dictionary import InvalidEntryError
+
+    store = DictionaryStore(tmp_path)
+    store.add(GUILD, "a", "えー")
+    with pytest.raises(InvalidEntryError):
+        store.add(GUILD, word, reading)
+    with pytest.raises(InvalidEntryError):
+        store.merge(GUILD, {"b": "びー", word: reading})
+    assert read_json(store.path_for(GUILD)) == {"a": "えー"}
+    assert store.get(GUILD).apply("abc") == "えーbc"
+
+
+def test_add_accepts_entries_at_the_length_limit(tmp_path):
+    from yomi_kai.dictionary import MAX_READING_LENGTH, MAX_WORD_LENGTH
+
+    store = DictionaryStore(tmp_path)
+    assert store.add(GUILD, "x" * MAX_WORD_LENGTH, "あ" * MAX_READING_LENGTH)
+
+
+@pytest.mark.parametrize("slash", [False, True])
+def test_dict_add_command_rejects_empty_word(tmp_path, slash):
+    from yomi_kai.cogs.dictionary import DictionaryCog
+    from yomi_kai.config import Config
+
+    store = DictionaryStore(tmp_path / "dict")
+    cog = DictionaryCog(SimpleNamespace(), Config(discord_token="d", prefix="y.", afk_time=60, sd_msg="x"), store)
+    ctx = FakeCtx(slash)
+    asyncio.run(DictionaryCog.dict_add.callback(cog, ctx, "", "ばくはつ"))
+    assert ctx.sent == [("辞書に登録できません: 単語が空です", {"ephemeral": slash})]
+    assert store.words(GUILD) == {}
+    assert not store.path_for(GUILD).exists()
+
+
 def test_aget_uses_cache(tmp_path):
     store = DictionaryStore(tmp_path)
     store.add(GUILD, "a", "あ")
@@ -208,7 +268,18 @@ def test_export_matches_store_format_and_round_trips(tmp_path):
 
 @pytest.mark.parametrize(
     "data",
-    [b"{broken", b"[]", b'{"a": 1}', b'{"a": ""}', b'{" ": "x"}', b"\xff\xfe", "too-large"],
+    [
+        b"{broken",
+        b"[]",
+        b'{"a": 1}',
+        b'{"a": ""}',
+        b'{" ": "x"}',
+        b'{"": "x"}',
+        b'{"' + b"x" * 51 + b'": "x"}',
+        b'{"a": "' + b"x" * 101 + b'"}',
+        b"\xff\xfe",
+        "too-large",
+    ],
 )
 def test_parse_import_rejects_invalid(data):
     from yomi_kai.cogs.dictionary import parse_dictionary_import

@@ -526,3 +526,158 @@ def test_backlog_speedup_applies_per_message_when_enabled():
     engine.calls.clear()
     asyncio.run(run(False))
     assert {speed for _, _, speed in engine.calls} == {1.0}
+
+
+# --- ワーカーの耐障害性・接続と切断の競合・スキップの対象 ---
+
+
+def test_source_factory_failure_does_not_kill_worker():
+    async def run():
+        attempts = []
+
+        def factory(wav):
+            attempts.append(wav)
+            if len(attempts) == 1:
+                raise OSError("ffmpeg not found")  # FFmpegPCMAudio の起動失敗
+            return wav
+
+        session = GuildSession(1, FakeEngine(), afk_time=60.0, source_factory=factory)
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+        session.enqueue("一", ZUNDA)
+        session.enqueue("二", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 1 and not session.is_busy)
+        assert vc.played == [wav("二")]
+        assert not session._worker.done()
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_unexpected_error_in_one_job_is_isolated():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        vc = FakeVoiceClient()
+        original_play = session._play
+        calls = []
+
+        async def flaky_play(data):
+            calls.append(data)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            await original_play(data)
+
+        session._play = flaky_play
+        await session.start(vc, FakeChannel())
+        session.enqueue("一", ZUNDA)
+        session.enqueue("二", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 1 and not session.is_busy)
+        assert vc.played == [wav("二")]
+        await session.close()
+
+    asyncio.run(run())
+
+
+class SlowDisconnectVoiceClient(FakeVoiceClient):
+    def __init__(self):
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def disconnect(self, *, force=False):
+        await self.release.wait()
+        self.disconnected = True
+
+
+def test_start_during_close_is_not_undone():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        old_vc = SlowDisconnectVoiceClient()
+        await session.start(old_vc, FakeChannel())
+        closing = asyncio.create_task(session.close())
+        await asyncio.sleep(0.01)  # close が切断を待っている途中
+
+        new_vc = FakeVoiceClient()
+        starting = asyncio.create_task(session.start(new_vc, FakeChannel()))
+        await asyncio.sleep(0.01)
+        assert not starting.done()  # 切断が終わるまで接続を始めない
+        old_vc.release.set()
+        await asyncio.gather(closing, starting)
+
+        assert old_vc.disconnected
+        assert session.is_connected and session.voice_client is new_vc
+        assert not new_vc.disconnected
+        session.enqueue("やあ", ZUNDA)
+        await wait_until(lambda: len(new_vc.played) == 1)
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_skip_after_skip_all_reports_nothing_while_stop_is_pending():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        vc = FakeVoiceClient(auto_finish=False)
+        await session.start(vc, FakeChannel())
+        session.enqueue("一", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 1)
+        assert session.skip_all() == 1
+        # ワーカーがまだ再生の終了を受け取っていなくても、生きているメッセージはない
+        assert not session.skip()
+        await session.close()
+
+    asyncio.run(run())
+
+
+def test_pending_excludes_skipped_messages():
+    async def run():
+        session, _ = make_session(FakeEngine())
+        session.prefetch_chunks = 1
+        vc = FakeVoiceClient(auto_finish=False)
+        await session.start(vc, FakeChannel())
+        session.enqueue("一。二。三。", ZUNDA)
+        session.enqueue("次。", ZUNDA)
+        await wait_until(lambda: len(vc.played) == 1)
+        await asyncio.sleep(0.02)
+        assert session.pending == 2  # 1件目の残り（三。）と2件目
+        assert session.skip()
+        assert session.pending == 1  # スキップした1件目はまだキューに残っていても数えない
+        await session.close()
+
+    asyncio.run(run())
+
+
+class SinglePoolAsyncEngine(FakeEngine):
+    """Synthesizer が1つだけの VOICEVOX を真似た非同期の偽エンジン（取り消すと Synthesizer が空く）。"""
+
+    def __init__(self, delays=None):
+        super().__init__(delays)
+        self._busy = None
+
+    async def synthesize_async(self, text, speaker, speed=1.0):
+        if self._busy is None:
+            self._busy = asyncio.Semaphore(1)
+        async with self._busy:
+            self.calls.append((text, speaker, speed))
+            await asyncio.sleep(self.delays.get(text, 0))
+            return f"{speaker}:{text}".encode()
+
+    def synthesize(self, text, speaker, speed=1.0):
+        raise AssertionError("GuildSession は synthesize_async を使う")
+
+
+def test_new_message_after_skip_all_is_not_delayed_by_skipped_synthesis():
+    async def run():
+        session, _ = make_session(SinglePoolAsyncEngine(delays={"とても遅い": 10.0}))
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+        session.enqueue("とても遅い", ZUNDA)
+        await asyncio.sleep(0.05)  # 合成中（Synthesizer を使っている）
+        assert session.skip_all() == 1
+        session.enqueue("次", ZUNDA)
+        started = time.monotonic()
+        await wait_until(lambda: len(vc.played) == 1, timeout=2.0)
+        assert time.monotonic() - started < 1.0
+        assert vc.played == [wav("次")]
+        await session.close()
+
+    asyncio.run(run())

@@ -74,7 +74,8 @@ def test_on_message_skips_ignored_user_and_role(tmp_path):
 def test_missing_permission_reply_is_private_for_slash(tmp_path):
     from discord.ext import commands
 
-    from yomi_kai.cogs.admin import MANAGE_GUILD_NOTICE, AdminCog
+    from yomi_kai.cogs.admin import AdminCog
+    from yomi_kai.cogs.common import MANAGE_GUILD_NOTICE
 
     sent = []
 

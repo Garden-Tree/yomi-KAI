@@ -41,6 +41,36 @@ def test_dictionary_applied_before_other_rules():
     assert build_read_text("公式", d) == "URL"
 
 
+def test_dictionary_does_not_break_mentions_or_custom_emojis():
+    d = compile_dictionary({"1": "いち", "@": "あっと", "smile": "すまいる", "<": "しょうなり"})
+    names = {123: "alice"}
+    text = build_read_text(
+        "<@123> <@!123> <@&1> <#1> <:smile:111> 1 smile",
+        d,
+        user_name=names.get,
+        role_name=lambda i: "role",
+        channel_name=lambda i: "general",
+    )
+    assert text == "アットalice アットalice アットrole general smile いち すまいる"
+
+
+def test_empty_or_blank_dictionary_keys_are_ignored():
+    d = compile_dictionary({"": "から", "  ": "くうはく", "w": "わら"})
+    assert build_read_text("abw", d) == "abわら"
+    assert compile_dictionary({"": "から"}).pattern is None
+
+
+def test_dictionary_expansion_is_bounded():
+    from yomi_kai.text import MAX_EXPANDED_LENGTH
+
+    d = compile_dictionary({"あ": "い" * 2000})
+    expanded = d.apply("あ" * 4000, limit=MAX_EXPANDED_LENGTH)
+    assert len(expanded) == MAX_EXPANDED_LENGTH
+    # 最終的な長さは max_length で切り詰める
+    assert build_read_text("あ" * 4000, d, max_length=100) == "い" * 100 + " 以下略"
+    assert len(build_read_text("あ" * 4000, d)) == MAX_EXPANDED_LENGTH
+
+
 # --- URL ---
 
 

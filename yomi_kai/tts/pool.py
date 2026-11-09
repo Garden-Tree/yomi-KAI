@@ -45,6 +45,13 @@ class LoopThread:
         """``coro`` をこのループで実行し、完了まで（呼び出し元のスレッドで）待つ。"""
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result()
 
+    async def run_async[R](self, coro: Coroutine[Any, Any, R]) -> R:
+        """``coro`` をこのループで実行し、呼び出し元のイベントループで（スレッドを塞がずに）待つ。
+
+        待っている側を取り消すと、このループで実行中のタスクも取り消される。
+        """
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self.loop))
+
     def stop(self) -> None:
         self.loop.call_soon_threadsafe(self.loop.stop)
         self._thread.join()
