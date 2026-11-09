@@ -86,3 +86,10 @@ def test_speaker_allowlist(tmp_path):
 def test_blocked_guilds_file(tmp_path):
     assert load(tmp_path).blocked_guilds_file == "settings/blocked_guilds.txt"
     assert load(tmp_path, "BLOCKED_GUILDS_FILE = data/block.txt\n").blocked_guilds_file == "data/block.txt"
+
+
+def test_record_usage(tmp_path):
+    assert load(tmp_path).record_usage is False
+    assert load(tmp_path, "RECORD_USAGE = True\n").record_usage is True
+    with pytest.raises(ConfigError, match="RECORD_USAGE"):
+        load(tmp_path, "RECORD_USAGE = maybe\n")
