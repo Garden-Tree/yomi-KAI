@@ -114,3 +114,40 @@ def test_autojoin_skips_without_permissions_and_survives_connect_failure(tmp_pat
     assert failing.connects == 1
     assert text_channel.sent == []
     assert GUILD_ID not in cog._autojoining
+
+
+def test_guild_remove_closes_session_and_drops_state(tmp_path):
+    cog = make_cog(tmp_path, make_config(), FakeEngine())
+    evicted = []
+    cog.settings.evict = lambda guild_id: evicted.append(("settings", guild_id))
+
+    async def evict_dictionary(guild_id):
+        evicted.append(("dictionary", guild_id))
+
+    cog.store.evict = evict_dictionary
+    voice_client = FakeVoiceClient()
+    disconnected = []
+
+    async def disconnect(*, force=False):
+        disconnected.append(force)
+
+    voice_client.disconnect = disconnect
+
+    async def run():
+        session = cog.get_session(GUILD_ID)
+        await session.start(voice_client, FakeTextChannel())
+        cog._last_reader[GUILD_ID] = (7, 0.0)
+        cog._auto_disconnected_at[GUILD_ID] = 0.0
+        await cog.on_guild_remove(SimpleNamespace(id=GUILD_ID))
+        assert not session.is_connected
+
+    asyncio.run(run())
+    assert disconnected == [True]
+    assert GUILD_ID not in cog.sessions
+    assert GUILD_ID not in cog._last_reader and GUILD_ID not in cog._auto_disconnected_at
+    assert evicted == [("settings", GUILD_ID), ("dictionary", GUILD_ID)]
+
+
+def test_guild_remove_without_evict_methods(tmp_path):
+    cog = make_cog(tmp_path, make_config(), FakeEngine())
+    asyncio.run(cog.on_guild_remove(SimpleNamespace(id=GUILD_ID)))  # ストアに evict がなくても動く

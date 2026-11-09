@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -495,6 +496,27 @@ class VoiceCog(commands.Cog):
         if joined:
             logger.info("%sに自動接続しました (guild=%s)", voice_channel.name, guild.id)
         return joined
+
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild) -> None:
+        """サーバーから退出した（キック・BAN を含む）ら、そのサーバーの読み上げを止めて状態を捨てる。"""
+        session = self.sessions.pop(guild.id, None)
+        if session is not None:
+            await session.close()
+        self._last_reader.pop(guild.id, None)
+        self._auto_disconnected_at.pop(guild.id, None)
+        # 設定・辞書のキャッシュも捨てる（evict を持つストアだけ）
+        for store in (self.settings, self.store):
+            evict = getattr(store, "evict", None)
+            if evict is None:
+                continue
+            try:
+                result = evict(guild.id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("キャッシュの破棄に失敗しました (guild=%s)", guild.id)
+        logger.info("サーバーから退出したため、読み上げの状態を破棄しました (guild=%s)", guild.id)
 
     async def _announce_voice(
         self,
