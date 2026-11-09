@@ -50,6 +50,16 @@ def test_status_fields():
     assert fields["稼働時間"] == UNKNOWN and fields["バージョン"] == UNKNOWN
 
 
+def test_status_synthesis_label_names_google_when_it_is_the_default():
+    fields = dict(
+        status_fields(
+            latency=0.05, sessions=0, queue=0, workers=1, healthy=True, last_error=None, errors=0,
+            uptime=None, version=UNKNOWN, google=True,
+        )
+    )
+    assert fields["音声合成"] == "Google TTS（VOICEVOX の合成ワーカー 1個）・正常"
+
+
 class FailingEngine:
     default_speaker = "ずんだもん"
 

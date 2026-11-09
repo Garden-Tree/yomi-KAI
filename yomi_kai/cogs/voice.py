@@ -297,6 +297,7 @@ class VoiceCog(commands.Cog):
             sessions=sum(1 for s in self.sessions.values() if s.is_connected),
             queue=None if ctx.guild is None else (session.pending if session is not None else 0),
             workers=self.config.voicevox_workers,
+            google=self.config.use_google_tts,
             healthy=self.stats.healthy,
             last_error=self.stats.last_error,
             errors=self.stats.errors,
