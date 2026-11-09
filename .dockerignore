@@ -12,6 +12,7 @@ voicevox_core/
 # 実行時はボリュームでマウントするデータ（イメージに含めない）
 dict/
 settings/
+usage/
 # 実行に不要なもの
 .github/
 docs/

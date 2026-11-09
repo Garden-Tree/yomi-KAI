@@ -62,12 +62,50 @@ main() {
         log "動作中のコンテナがないため、ロールバック用のイメージは退避しません"
     fi
 
+    # 退避したイメージに戻して起動し直す（呼び出し側はその後デプロイを失敗扱いにする）
+    rollback() {
+        log "直前の版（${prev_commit}）にロールバックします"
+        git reset --hard --quiet "$prev_commit"
+        docker tag "$previous_image" "$image"
+        local since
+        since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if docker compose up -d --no-build --force-recreate && wait_healthy "$since"; then
+            log "ロールバックしました。デプロイは失敗扱いにします"
+        else
+            log "ロールバック後も起動を確認できませんでした。手動で確認してください"
+        fi
+    }
+
     # ビルドに失敗した場合は、コンテナは入れ替わらず旧版のまま動き続ける
     local started
     started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    if ! docker compose up -d --build; then
-        log "ビルドまたは起動に失敗しました。旧版のコンテナはそのまま動いています"
+    # y.status に表示するバージョンとして、git の短いハッシュをイメージに埋め込む
+    local version
+    version="$(git rev-parse --short HEAD)"
+    if ! docker compose build --build-arg GIT_SHA="$version"; then
+        log "ビルドに失敗しました。旧版のコンテナはそのまま動いています"
         git reset --hard --quiet "$prev_commit"
+        return 1
+    fi
+
+    # 動作中の版と同じコミット（またはそれより古いコミット）を指定した場合、できるイメージは同じで
+    # up -d はコンテナを入れ替えない。起動完了のログも新たに出ないため、待たずに成功で終える
+    local new_image_id
+    new_image_id="$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null || true)"
+    if [[ -n "$current_image_id" && "$new_image_id" == "$current_image_id" ]]; then
+        log "動作中のコンテナと同じイメージのため、入れ替えずに終了します（${sha} は既にデプロイ済み）"
+        return 0
+    fi
+
+    # ビルド後の起動に失敗した場合、コンテナが止まっている・入れ替わっている可能性があるため旧版に戻す
+    if ! docker compose up -d; then
+        log "新しい版の起動（docker compose up）に失敗しました"
+        if (( has_previous == 0 )); then
+            log "退避したイメージがないためロールバックできません"
+            git reset --hard --quiet "$prev_commit"
+            return 1
+        fi
+        rollback
         return 1
     fi
 
@@ -87,16 +125,7 @@ main() {
         return 1
     fi
 
-    log "直前の版（${prev_commit}）にロールバックします"
-    git reset --hard --quiet "$prev_commit"
-    docker tag "$previous_image" "$image"
-    started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    docker compose up -d --no-build --force-recreate
-    if wait_healthy "$started"; then
-        log "ロールバックしました。デプロイは失敗扱いにします"
-    else
-        log "ロールバック後も起動を確認できませんでした。手動で確認してください"
-    fi
+    rollback
     return 1
 }
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+import unicodedata
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from unicodedata import east_asian_width
 
@@ -18,18 +19,36 @@ class WordDictionary:
     words: Mapping[str, str] = field(default_factory=dict)
     pattern: re.Pattern[str] | None = None
 
-    def apply(self, text: str) -> str:
+    def apply(self, text: str, limit: int | None = None) -> str:
+        """辞書の単語を読みに置き換える。``limit`` を指定すると、結果がその文字数に達した時点で打ち切る。"""
         if self.pattern is None:
             return text
-        return self.pattern.sub(lambda m: self.words[m.group(0)], text)
+        if limit is None:
+            return self.pattern.sub(lambda m: self.words[m.group(0)], text)
+        # 短い単語を長い読みにする登録があっても、置換後の文字列が際限なく長くならないようにする
+        parts: list[str] = []
+        size = 0
+        position = 0
+        for match in self.pattern.finditer(text):
+            piece = text[position : match.start()] + self.words[match.group(0)]
+            parts.append(piece)
+            size += len(piece)
+            position = match.end()
+            if size >= limit:
+                return "".join(parts)[:limit]
+        parts.append(text[position:])
+        return "".join(parts)[:limit]
 
 
 EMPTY_DICTIONARY = WordDictionary()
 
 
 def compile_dictionary(words: Mapping[str, str]) -> WordDictionary:
-    """単語→読みの辞書から置換用の正規表現を作る。長い単語を優先してマッチさせる。"""
-    words = dict(words)
+    """単語→読みの辞書から置換用の正規表現を作る。長い単語を優先してマッチさせる。
+
+    空や空白だけの単語は無視する（空の単語は文字と文字のあいだのすべてにマッチしてしまうため）。
+    """
+    words = {word: reading for word, reading in words.items() if word.strip()}
     if not words:
         return EMPTY_DICTIONARY
     pattern = re.compile("|".join(re.escape(k) for k in sorted(words, key=len, reverse=True)))
@@ -55,6 +74,38 @@ _UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])(_{1,2})([^_\n]+?)\1(?![A-Za-z0-9
 
 CODE_BLOCK_TEXT = "コード省略"
 TRUNCATED_SUFFIX = " 以下略"
+# 辞書を当てる前の本文の上限（Discord のメッセージの上限）と、辞書を当てたあとの上限。
+# 最終的な長さは MAX_READ_LENGTH（build_read_text の max_length）で切り詰める
+MAX_INPUT_LENGTH = 4000
+MAX_EXPANDED_LENGTH = 20000
+
+# メンション・サーバー絵文字（辞書を当てるあいだ、記号1文字に置き換えて守る）
+_PROTECTED_RE = re.compile(r"<@[!&]?[0-9]+>|<#[0-9]+>|<a?:\w+:[0-9]+>")
+# 守った部分の目印に使う私用領域の文字（補助私用面 A。本文の上限より十分多い）
+_PLACEHOLDER_BASE = 0xF0000
+_PLACEHOLDER_RE = re.compile("[\U000f0000-\U000ffffd]")
+
+
+def _protect(text: str) -> tuple[str, list[str]]:
+    """メンション・サーバー絵文字を目印の1文字に置き換える（``<@123>`` の数字などが辞書で壊れないように）。"""
+    tokens: list[str] = []
+
+    def keep(match: re.Match[str]) -> str:
+        tokens.append(match.group(0))
+        return chr(_PLACEHOLDER_BASE + len(tokens) - 1)
+
+    return _PROTECTED_RE.sub(keep, text), tokens
+
+
+def _restore(text: str, tokens: Sequence[str]) -> str:
+    if not tokens:
+        return text
+
+    def put_back(match: re.Match[str]) -> str:
+        index = ord(match.group(0)) - _PLACEHOLDER_BASE
+        return tokens[index] if index < len(tokens) else match.group(0)
+
+    return _PLACEHOLDER_RE.sub(put_back, text)
 
 
 def replace_code(text: str) -> str:
@@ -114,22 +165,263 @@ def build_read_text(
     role_name: NameResolver | None = None,
     channel_name: NameResolver | None = None,
     max_length: int = 0,
+    attachments: str = "",
 ) -> str:
     """メッセージ本文を読み上げ用に整形する。
 
-    処理順: コード → 辞書置換 → URL → ネタバレ → メンション → サーバー絵文字 → マークダウン → 文字数制限。
+    処理順: コード → 辞書置換 → URL → ネタバレ → メンション → サーバー絵文字 → マークダウン
+    → 添付ファイルの説明（``attachments``、:func:`describe_attachments` の結果）を末尾に追加 → 文字数制限。
     コードを最初に処理するのは、コード内の文字列が辞書や URL として読まれないようにするため。
-    ``max_length`` が正なら、整形後の文字数で切り詰める（0 以下で無制限）。
+    辞書置換のあいだ、メンション・サーバー絵文字（``<@123>`` など）は辞書で壊れないように守っておく。
+    辞書置換の前の本文は ``MAX_INPUT_LENGTH``、置換後は ``MAX_EXPANDED_LENGTH`` 文字で打ち切る。
+    ``max_length`` が正なら、添付ファイルの説明も含めた整形後の文字数で切り詰める（0 以下で無制限）。
     """
-    text = replace_code(text)
+    text = replace_code(text[:MAX_INPUT_LENGTH])
     if dictionary is not None:
-        text = dictionary.apply(text)
+        text, protected = _protect(text)
+        text = _restore(dictionary.apply(text, limit=MAX_EXPANDED_LENGTH), protected)
     text = replace_urls(text)
     text = replace_spoilers(text)
     text = replace_mentions(text, user_name=user_name, role_name=role_name, channel_name=channel_name)
     text = replace_custom_emojis(text)
     text = strip_markdown(text)
+    if attachments:
+        text = f"{text} {attachments}" if text.strip() else attachments
     return truncate(text, max_length)
+
+
+# --- 添付ファイル・スタンプ ---
+# (種類, 2つ以上のときの助数詞)。読み上げる順番もこの順
+_ATTACHMENT_KINDS = {
+    "image": ("画像", "枚"),
+    "video": ("動画", "本"),
+    "audio": ("音声", "件"),
+    "file": ("ファイル", "件"),
+}
+_EXTENSION_KINDS = {
+    **dict.fromkeys(("png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "heic"), "image"),
+    **dict.fromkeys(("mp4", "mov", "webm", "mkv", "avi"), "video"),
+    **dict.fromkeys(("mp3", "wav", "ogg", "m4a", "flac", "aac", "opus"), "audio"),
+}
+
+
+def attachment_kind(content_type: str | None, filename: str = "") -> str:
+    """``image`` / ``video`` / ``audio`` / ``file`` のいずれか。content_type が無ければ拡張子で判断する。"""
+    if content_type:
+        major = content_type.split("/", 1)[0].strip().lower()
+        return major if major in ("image", "video", "audio") else "file"
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _EXTENSION_KINDS.get(extension, "file")
+
+
+def describe_attachments(
+    attachments: Sequence[tuple[str | None, str]] = (),
+    sticker_names: Sequence[str] = (),
+) -> str:
+    """添付ファイル（(content_type, ファイル名) の列）とスタンプ名から読み上げ用の説明を作る。
+
+    例: 画像1つ → 「画像」、画像2つと動画1つ → 「画像2枚 動画」、スタンプ → 「スタンプ 名前」。
+    """
+    counts: dict[str, int] = {}
+    for content_type, filename in attachments:
+        kind = attachment_kind(content_type, filename)
+        counts[kind] = counts.get(kind, 0) + 1
+    parts = []
+    for kind, (label, counter) in _ATTACHMENT_KINDS.items():
+        count = counts.get(kind, 0)
+        if count == 1:
+            parts.append(label)
+        elif count > 1:
+            parts.append(f"{label}{count}{counter}")
+    parts += [f"スタンプ {name}" for name in sticker_names]
+    return " ".join(parts)
+
+
+# --- 合成用の分割 ---
+# 文の終わり。この直後（続く記号・閉じ括弧を含めて）で必ず区切る
+SENTENCE_ENDS = frozenset("。！？!?")
+# 読点。長すぎる場合だけここで区切る
+COMMAS = frozenset("、，")
+# 区切りの直後にあっても前のかたまりに含める記号（「！？」「…」の連続や閉じ括弧を分断しない）
+_CLOSING_BRACKETS = frozenset("」』）)】〕］]〉》”’")
+_TRAILING = SENTENCE_ENDS | COMMAS | _CLOSING_BRACKETS | frozenset("…‥・ー〜～\"'")
+DEFAULT_SOFT_LIMIT = 40
+
+
+def _consume_trailing(text: str, i: int) -> int:
+    """``text[i]`` 以降の記号・閉じ括弧の続きを読み飛ばした位置を返す。"""
+    while i < len(text) and text[i] in _TRAILING:
+        i += 1
+    return i
+
+
+def _is_punctuation_only(text: str) -> bool:
+    return all(unicodedata.category(ch)[0] in "PSZ" for ch in text)
+
+
+def _split_sentences(line: str) -> list[str]:
+    pieces = []
+    start = i = 0
+    while i < len(line):
+        if line[i] in SENTENCE_ENDS:
+            end = _consume_trailing(line, i + 1)
+            # 「すごい！」と言った。のように、閉じ括弧の直後に同じ行の続きがあれば文の途中なので区切らない
+            if any(ch in _CLOSING_BRACKETS for ch in line[i + 1 : end]) and end < len(line) and not line[end].isspace():
+                i = end
+                continue
+            i = end
+            pieces.append(line[start:i])
+            start = i
+        else:
+            i += 1
+    pieces.append(line[start:])
+    return pieces
+
+
+def _split_long(sentence: str, soft_limit: int) -> list[str]:
+    """``soft_limit`` 文字を超える文を読点で分ける。読点がなければそのまま。"""
+    pieces = []
+    rest = sentence
+    while len(rest) > soft_limit:
+        # 読点の直後（続く記号を含む）の位置の候補。先頭の読点（中身のないかたまり）は使わない
+        cuts = []
+        for i, ch in enumerate(rest):
+            if ch in COMMAS:
+                end = _consume_trailing(rest, i + 1)
+                if not _is_punctuation_only(rest[:end]) and end < len(rest):
+                    cuts.append(end)
+        if not cuts:
+            break
+        before = [c for c in cuts if c <= soft_limit]
+        cut = before[-1] if before else cuts[0]
+        pieces.append(rest[:cut])
+        rest = rest[cut:]
+    pieces.append(rest)
+    return pieces
+
+
+def split_for_synthesis(text: str, soft_limit: int = DEFAULT_SOFT_LIMIT) -> list[str]:
+    """読み上げテキストを、合成・再生を早く始めるためのかたまりに分ける。
+
+    * 「。！？!?」の後（続く「！？」「…」や閉じ括弧も前に含める）と改行で区切る。ただし閉じ括弧の直後に
+      同じ行の続きがある場合（「すごい！」と言った。）は文の途中なので区切らない。
+    * 読点「、，」では、かたまりが ``soft_limit`` 文字を超えるときだけ区切る（上限より前の最後の読点、
+      なければ上限より後の最初の読点）。読点ごとに区切るとそのたびにイントネーションがリセットされ、
+      不自然な読み方になるため。
+    * 句読点のない長い文は途中で切らない。空白だけのかたまりは捨て、記号だけのかたまりは前に連結する。
+    """
+    chunks: list[str] = []
+    for line in text.splitlines():
+        for sentence in _split_sentences(line):
+            for piece in _split_long(sentence, soft_limit):
+                piece = piece.strip()
+                if not piece:
+                    continue
+                if chunks and _is_punctuation_only(piece):
+                    chunks[-1] += piece
+                elif len(chunks) == 1 and _is_punctuation_only(chunks[0]):
+                    chunks[0] += piece  # 先頭が記号だけだった場合は次に連結する
+                else:
+                    chunks.append(piece)
+    return chunks
+
+
+# --- 入退室 ---
+JOIN = "join"
+LEAVE = "leave"
+
+
+def voice_transition(
+    before_channel_id: int | None,
+    after_channel_id: int | None,
+    bot_channel_id: int | None,
+    *,
+    is_bot: bool,
+) -> str | None:
+    """Bot のいるボイスチャンネルへの入室なら ``JOIN``、退室なら ``LEAVE``、それ以外は None。
+
+    チャンネル間の移動は、Bot のいるチャンネルから出れば退室、入れば入室として扱う。
+    ミュート・配信など、チャンネルが変わらない更新は None。Bot（他の Bot を含む）は対象外。
+    """
+    if is_bot or bot_channel_id is None or before_channel_id == after_channel_id:
+        return None
+    if after_channel_id == bot_channel_id:
+        return JOIN
+    if before_channel_id == bot_channel_id:
+        return LEAVE
+    return None
+
+
+def announce_text(kind: str, display_name: str) -> str:
+    return f"{display_name}さんが{'入室' if kind == JOIN else '退室'}しました"
+
+
+# 同じ人が続けて発言した場合、この秒数以内なら名前を読み上げない
+NAME_SKIP_SECONDS = 30.0
+
+
+def should_read_name(
+    previous: tuple[int, float] | None, user_id: int, now: float, window: float = NAME_SKIP_SECONDS
+) -> bool:
+    """名前を読み上げるか。``previous`` はそのサーバーで直前に読み上げた発言の (ユーザーID, 時刻)。
+
+    同じ人の発言が ``window`` 秒以内に続いた場合は読み上げない（連投のたびに名前を読まない）。
+    """
+    if previous is None:
+        return True
+    last_user, last_time = previous
+    return last_user != user_id or now - last_time > window
+
+
+# 自動切断のあと、この秒数のあいだは自動接続しない（接続と切断を繰り返さないように）
+AUTOJOIN_COOLDOWN = 30.0
+
+
+def autojoin_allowed(last_auto_disconnect: float | None, now: float, cooldown: float = AUTOJOIN_COOLDOWN) -> bool:
+    """自動切断から ``cooldown`` 秒以上たっていれば（または一度も自動切断していなければ）自動接続してよい。"""
+    return last_auto_disconnect is None or now - last_auto_disconnect >= cooldown
+
+
+def autojoin_text_channel(
+    autojoin: Mapping[int, int], *, member_is_bot: bool, before_id: int | None, after_id: int | None, connected: bool
+) -> int | None:
+    """自動接続するなら読み上げるテキストチャンネルの ID、しないなら None。
+
+    Bot 以外のメンバーが、登録されたボイスチャンネルに入った（移動を含む）とき、Bot がまだ接続していなければ接続する。
+    """
+    if member_is_bot or connected or after_id is None or before_id == after_id:
+        return None
+    return autojoin.get(after_id)
+
+
+def with_name(text: str, name: str) -> str:
+    """本文の前に「名前、」を付ける（切り詰めは本文だけに済ませてから呼ぶ）。"""
+    return f"{name}、{text}"
+
+
+def chunk_lines(lines: Sequence[str], limit: int = 1900) -> list[str]:
+    """行を改行でつなぎ、1つあたり ``limit`` 文字以内のかたまりに分ける（Discord の2000文字制限対策）。
+
+    1行が ``limit`` を超える場合はその行を途中で分割する。
+    """
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def gen_sd_text(msg: str) -> str:

@@ -1,8 +1,15 @@
+import pytest
+
 from yomi_kai.text import (
+    JOIN,
+    LEAVE,
+    announce_text,
     build_read_text,
+    chunk_lines,
     compile_dictionary,
     gen_sd_text,
     strip_markdown,
+    voice_transition,
 )
 
 # --- 辞書置換 ---
@@ -32,6 +39,36 @@ def test_dictionary_applied_before_other_rules():
     # 辞書で生成された URL も URL 置換の対象になる（従来の処理順）
     d = compile_dictionary({"公式": "https://example.com"})
     assert build_read_text("公式", d) == "URL"
+
+
+def test_dictionary_does_not_break_mentions_or_custom_emojis():
+    d = compile_dictionary({"1": "いち", "@": "あっと", "smile": "すまいる", "<": "しょうなり"})
+    names = {123: "alice"}
+    text = build_read_text(
+        "<@123> <@!123> <@&1> <#1> <:smile:111> 1 smile",
+        d,
+        user_name=names.get,
+        role_name=lambda i: "role",
+        channel_name=lambda i: "general",
+    )
+    assert text == "アットalice アットalice アットrole general smile いち すまいる"
+
+
+def test_empty_or_blank_dictionary_keys_are_ignored():
+    d = compile_dictionary({"": "から", "  ": "くうはく", "w": "わら"})
+    assert build_read_text("abw", d) == "abわら"
+    assert compile_dictionary({"": "から"}).pattern is None
+
+
+def test_dictionary_expansion_is_bounded():
+    from yomi_kai.text import MAX_EXPANDED_LENGTH
+
+    d = compile_dictionary({"あ": "い" * 2000})
+    expanded = d.apply("あ" * 4000, limit=MAX_EXPANDED_LENGTH)
+    assert len(expanded) == MAX_EXPANDED_LENGTH
+    # 最終的な長さは max_length で切り詰める
+    assert build_read_text("あ" * 4000, d, max_length=100) == "い" * 100 + " 以下略"
+    assert len(build_read_text("あ" * 4000, d)) == MAX_EXPANDED_LENGTH
 
 
 # --- URL ---
@@ -129,3 +166,51 @@ def test_emoji_name_with_underscores_untouched():
 def test_gen_sd_text():
     assert gen_sd_text("word") == "＿人人人人＿\n＞　word　＜\n￣Y^Y^Y^Y￣"
     assert gen_sd_text("突然の死") == "＿人人人人人人＿\n＞　突然の死　＜\n￣Y^Y^Y^Y^Y^Y￣"
+
+
+# --- 入退室 ---
+
+BOT_VC = 10
+OTHER_VC = 20
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        (None, BOT_VC, JOIN),  # 接続
+        (BOT_VC, None, LEAVE),  # 切断
+        (OTHER_VC, BOT_VC, JOIN),  # 別のチャンネルから移動してきた
+        (BOT_VC, OTHER_VC, LEAVE),  # 別のチャンネルへ移動した
+        (None, OTHER_VC, None),  # 関係ないチャンネル
+        (OTHER_VC, None, None),
+        (OTHER_VC, 30, None),
+        (BOT_VC, BOT_VC, None),  # ミュート・配信などの変更
+        (None, None, None),
+    ],
+)
+def test_voice_transition(before, after, expected):
+    assert voice_transition(before, after, BOT_VC, is_bot=False) == expected
+
+
+def test_voice_transition_ignores_bots_and_unconnected():
+    assert voice_transition(None, BOT_VC, BOT_VC, is_bot=True) is None
+    assert voice_transition(None, BOT_VC, None, is_bot=False) is None
+
+
+def test_announce_text():
+    assert announce_text(JOIN, "たろう") == "たろうさんが入室しました"
+    assert announce_text(LEAVE, "たろう") == "たろうさんが退室しました"
+
+
+# --- 長いメッセージの分割 ---
+
+
+def test_chunk_lines():
+    assert chunk_lines(["a", "b", "c"], limit=3) == ["a\nb", "c"]
+    assert chunk_lines(["abc", "d"], limit=3) == ["abc", "d"]
+    assert chunk_lines(["abcdefg", "h"], limit=3) == ["abc", "def", "g\nh"]
+    assert chunk_lines([]) == []
+    lines = [f"話者{i}" for i in range(1000)]
+    chunks = chunk_lines(lines)
+    assert all(len(c) <= 1900 for c in chunks)
+    assert "\n".join(chunks).split("\n") == lines
