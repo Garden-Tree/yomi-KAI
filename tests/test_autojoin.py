@@ -60,6 +60,9 @@ class FakeVoiceChannel:
         self.name = f"vc-{channel_id}"
         self.connects = 0
 
+    def permissions_for(self, member):
+        return SimpleNamespace(connect=True, speak=True)
+
     async def connect(self):
         self.connects += 1
         return FakeVoiceClient()
@@ -77,7 +80,9 @@ class FakeTextChannel:
 
 
 async def join(cog, voice_channel, text_channel, *, member_bot=False):
-    guild = SimpleNamespace(id=GUILD_ID, voice_client=None, get_channel=lambda i: text_channel if i == TEXT else None)
+    guild = SimpleNamespace(
+        id=GUILD_ID, me=object(), voice_client=None, get_channel=lambda i: text_channel if i == TEXT else None
+    )
     member = SimpleNamespace(id=7, bot=member_bot, guild=guild, display_name="alice")
     before, after = SimpleNamespace(channel=None), SimpleNamespace(channel=voice_channel)
     return await cog._maybe_autojoin(member, before, after)

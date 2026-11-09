@@ -8,7 +8,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Literal
+from collections.abc import Awaitable, Callable
+from typing import Any, Literal
 
 import discord
 from discord import app_commands
@@ -36,6 +37,19 @@ from ..usage import UsageStore
 from .common import EMBED_COLOR, SAVE_FAILED_NOTICE, reply
 
 logger = logging.getLogger(__name__)
+
+
+def missing_voice_permissions(voice_channel: Any, member: Any) -> list[str]:
+    """``member``（Bot 自身）が ``voice_channel`` で読み上げるのに足りない権限の名前（足りていれば空）。"""
+    if member is None:
+        return []
+    permissions = voice_channel.permissions_for(member)
+    missing = []
+    if not permissions.connect:
+        missing.append("接続")
+    if not permissions.speak:
+        missing.append("発言")
+    return missing
 
 
 class VoiceCog(commands.Cog):
@@ -92,7 +106,8 @@ class VoiceCog(commands.Cog):
         self._auto_disconnected_at[guild_id] = self._clock()
 
     async def cog_unload(self) -> None:
-        for session in self.sessions.values():
+        # close の途中で sessions が変わってもよいように、写しを回す
+        for session in list(self.sessions.values()):
             await session.close()
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
@@ -187,20 +202,22 @@ class VoiceCog(commands.Cog):
             logger.info("%sさんはボイスチャンネルに接続していません", ctx.author)
             return
 
+        voice_channel = ctx.author.voice.channel
+        missing = missing_voice_permissions(voice_channel, ctx.guild.me)
+        if missing:
+            await reply(
+                ctx,
+                f"{voice_channel.name}に接続できません。Bot に「{'」「'.join(missing)}」の権限を付けてください",
+                private=True,
+            )
+            logger.info("%sに接続する権限がありません (guild=%s, %s)", voice_channel.name, ctx.guild.id, missing)
+            return
+
         # 接続に3秒以上かかるとスラッシュコマンドが「応答しませんでした」になるので先に応答を保留する
         # （プレフィックスでは何もしない）
         await ctx.defer()
 
-        voice_channel = ctx.author.voice.channel
-        voice_client = ctx.guild.voice_client
-        if voice_client is not None:  # 他のボイスチャンネルに接続していた場合
-            await voice_client.move_to(voice_channel)
-        else:
-            voice_client = await voice_channel.connect()
-
         guild_id = ctx.guild.id
-        session = self.get_session(guild_id)
-        await session.start(voice_client, ctx.channel)
 
         async def select_server_speaker(interaction: discord.Interaction, name: str) -> None:
             try:
@@ -212,18 +229,49 @@ class VoiceCog(commands.Cog):
             await interaction.response.send_message(f"{name}が選択されました")
             logger.info("サーバーの話者を%sに変更しました (guild=%s)", name, guild_id)
 
-        settings = await self.settings.aget(guild_id)
-        current = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
-        view = DropdownView(self.engine.speakers(), f"サーバーの話者: {current}", select_server_speaker)
-        await reply(ctx, "話者を選んでください", view=view)
-        connected_embed = discord.Embed(title="読み上げ開始", color=EMBED_COLOR)
-        connected_embed.add_field(name="テキストチャンネル", value=f"{ctx.channel.name}", inline=False)
-        connected_embed.add_field(name="ボイスチャンネル", value=f"{voice_channel.name}", inline=False)
-        await reply(ctx, embed=connected_embed)
-        logger.info("%sに接続しました", voice_channel.name)
+        async def announce(embed: discord.Embed) -> None:
+            settings = await self.settings.aget(guild_id)
+            current = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
+            view = DropdownView(self.engine.speakers(), f"サーバーの話者: {current}", select_server_speaker)
+            await reply(ctx, "話者を選んでください", view=view)
+            await reply(ctx, embed=embed)
+
+        if not await self._join(ctx.guild, voice_channel, ctx.channel, "読み上げ開始", announce):
+            await reply(ctx, f"{voice_channel.name}に接続できませんでした。少し待ってからもう一度お試しください")
+
+    async def _join(
+        self,
+        guild: discord.Guild,
+        voice_channel: discord.VoiceChannel | discord.StageChannel,
+        text_channel: discord.abc.Messageable,
+        title: str,
+        announce: Callable[[discord.Embed], Awaitable[object]],
+    ) -> bool:
+        """ボイスチャンネルに接続（すでに接続していれば移動）し、テキストチャンネルの読み上げを始める。
+
+        接続・移動に失敗したら（タイムアウト、別の接続と競合した場合など）ログに残して False を返す。
+        接続できたら ``title`` の埋め込みを ``announce`` に渡して知らせ、辞書を先読みして True を返す。
+        """
+        voice_client = guild.voice_client
+        try:
+            if voice_client is not None:  # 他のボイスチャンネルに接続していた場合
+                await voice_client.move_to(voice_channel)
+            else:
+                voice_client = await voice_channel.connect()
+        except Exception:
+            logger.exception("%sへの接続に失敗しました (guild=%s)", voice_channel.name, guild.id)
+            return False
+
+        await self.get_session(guild.id).start(voice_client, text_channel)
+        embed = discord.Embed(title=title, color=EMBED_COLOR)
+        embed.add_field(name="テキストチャンネル", value=f"{text_channel.name}", inline=False)
+        embed.add_field(name="ボイスチャンネル", value=f"{voice_channel.name}", inline=False)
+        await announce(embed)
+        logger.info("%sに接続しました (guild=%s)", voice_channel.name, guild.id)
 
         # 辞書を先読みしておき、読み上げ時にファイルI/Oが発生しないようにする
-        await self.store.aget(ctx.guild.id)
+        await self.store.aget(guild.id)
+        return True
 
     @commands.hybrid_command(name="status", description="Bot の動作状況を表示します", ignore_extra=False)
     async def status(self, ctx: commands.Context) -> None:
@@ -428,22 +476,25 @@ class VoiceCog(commands.Cog):
             return False
 
         voice_channel = after.channel
+        missing = missing_voice_permissions(voice_channel, guild.me)
+        if missing:
+            logger.warning("%sに自動接続する権限がありません (guild=%s, %s)", voice_channel.name, guild.id, missing)
+            return False
+
+        async def announce(embed: discord.Embed) -> None:
+            await text_channel.send(embed=embed)
+
         self._autojoining.add(guild.id)
         try:
-            voice_client = await voice_channel.connect()
-            await self.get_session(guild.id).start(voice_client, text_channel)
-            embed = discord.Embed(title="自動接続しました", color=EMBED_COLOR)
-            embed.add_field(name="テキストチャンネル", value=f"{text_channel.name}", inline=False)
-            embed.add_field(name="ボイスチャンネル", value=f"{voice_channel.name}", inline=False)
-            await text_channel.send(embed=embed)
-            logger.info("%sに自動接続しました (guild=%s)", voice_channel.name, guild.id)
+            joined = await self._join(guild, voice_channel, text_channel, "自動接続しました", announce)
         except Exception:
             logger.exception("自動接続に失敗しました (guild=%s)", guild.id)
             return False
         finally:
             self._autojoining.discard(guild.id)
-        await self.store.aget(guild.id)
-        return True
+        if joined:
+            logger.info("%sに自動接続しました (guild=%s)", voice_channel.name, guild.id)
+        return joined
 
     async def _announce_voice(
         self,
