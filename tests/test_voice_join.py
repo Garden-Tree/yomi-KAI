@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import discord
 from test_voice_cog import GUILD_ID, FakeEngine, FakeVoiceClient, make_cog, make_config
 
+from yomi_kai.session import AFK_NOTICE
+
 TEXT = 42
 VC = 500
 
@@ -151,3 +153,22 @@ def test_guild_remove_closes_session_and_drops_state(tmp_path):
 def test_guild_remove_without_evict_methods(tmp_path):
     cog = make_cog(tmp_path, make_config(), FakeEngine())
     asyncio.run(cog.on_guild_remove(SimpleNamespace(id=GUILD_ID)))  # ストアに evict がなくても動く
+
+
+def test_leave_without_session_disconnects_voice_client(tmp_path):
+    cog = make_cog(tmp_path, make_config(), FakeEngine())
+    cog._clock = lambda: 123.0
+    disconnected = []
+
+    async def disconnect(*, force=False):
+        disconnected.append(force)
+
+    guild = SimpleNamespace(id=GUILD_ID, voice_client=SimpleNamespace(disconnect=disconnect))
+    asyncio.run(cog._leave(guild, AFK_NOTICE, auto=True))
+    assert disconnected == [True]
+    assert cog._auto_disconnected_at[GUILD_ID] == 123.0
+
+    asyncio.run(cog._leave(guild))  # 手動の切断は自動切断として記録しない
+    cog._auto_disconnected_at.clear()
+    asyncio.run(cog._leave(guild))
+    assert GUILD_ID not in cog._auto_disconnected_at

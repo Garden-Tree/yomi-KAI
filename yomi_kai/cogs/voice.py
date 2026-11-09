@@ -274,6 +274,20 @@ class VoiceCog(commands.Cog):
         await self.store.aget(guild.id)
         return True
 
+    async def _leave(self, guild: discord.Guild, notice: str | None = None, *, auto: bool = False) -> None:
+        """読み上げを止めて切断する。``auto=True`` なら自動切断として記録する（自動接続を少し待つため）。"""
+        if auto:
+            self._note_auto_disconnect(guild.id)
+        session = self.sessions.get(guild.id)
+        if session is not None and session.is_connected:
+            await session.close(notice=notice)
+            return
+        voice_client = guild.voice_client
+        if voice_client is not None:
+            await voice_client.disconnect(force=True)
+            if notice:
+                logger.info(notice)
+
     @commands.hybrid_command(name="status", description="Bot の動作状況を表示します", ignore_extra=False)
     async def status(self, ctx: commands.Context) -> None:
         session = self.sessions.get(ctx.guild.id) if ctx.guild is not None else None
@@ -304,11 +318,7 @@ class VoiceCog(commands.Cog):
             return
 
         await ctx.defer()
-        session = self.sessions.get(ctx.guild.id)
-        if session is not None and session.is_connected:
-            await session.close()
-        else:
-            await voice_client.disconnect(force=True)
+        await self._leave(ctx.guild)
         await reply(ctx, "切断しました")
         logger.info("切断しました")
 
@@ -365,6 +375,17 @@ class VoiceCog(commands.Cog):
         ):
             return
 
+        # 読み上げない発言は、辞書の読み込みや本文の整形より前に弾く
+        settings = await self.settings.aget(guild.id)
+        if not should_read_author(
+            is_self=is_self, is_bot=message.author.bot, is_webhook=is_webhook, read_bots=settings.read_bots
+        ):
+            return
+        # 読み上げないユーザー・ロール（y.ignore）
+        roles = getattr(message.author, "roles", None) or ()
+        if is_ignored(settings, message.author.id, (r.id for r in roles)):
+            return
+
         dictionary = await self.store.aget(guild.id)
         read_msg = build_read_text(
             message.content,
@@ -383,15 +404,6 @@ class VoiceCog(commands.Cog):
         if not read_msg.strip():
             return
 
-        settings = await self.settings.aget(guild.id)
-        if not should_read_author(
-            is_self=is_self, is_bot=message.author.bot, is_webhook=is_webhook, read_bots=settings.read_bots
-        ):
-            return
-        # 読み上げないユーザー・ロール（y.ignore）
-        roles = getattr(message.author, "roles", None) or ()
-        if is_ignored(settings, message.author.id, (r.id for r in roles)):
-            return
         speaker, speed = resolve_voice(
             settings, message.author.id, self.available_speakers, self.engine.default_speaker
         )
@@ -423,12 +435,10 @@ class VoiceCog(commands.Cog):
             if after.channel is None:
                 # キック・切断された
                 logger.info("ボイスチャンネルから切断されました (guild=%s)", guild.id)
-                self._note_auto_disconnect(guild.id)
-                await session.close()
+                await self._leave(guild, auto=True)
             elif before.channel != after.channel and len(after.channel.members) == 1:
                 # 誰もいないチャンネルへ移動させられた
-                self._note_auto_disconnect(guild.id)
-                await session.close(notice=AFK_NOTICE)
+                await self._leave(guild, AFK_NOTICE, auto=True)
             return
 
         voice_client = guild.voice_client
@@ -437,12 +447,7 @@ class VoiceCog(commands.Cog):
             and voice_client.channel == before.channel
             and len(voice_client.channel.members) == 1
         ):  # ボイスチャンネルに自分だけ残っていたら
-            self._note_auto_disconnect(guild.id)
-            if session is not None and session.is_connected:
-                await session.close(notice=AFK_NOTICE)
-            else:
-                await voice_client.disconnect(force=True)
-                logger.info(AFK_NOTICE)
+            await self._leave(guild, AFK_NOTICE, auto=True)
             return
 
         if await self._maybe_autojoin(member, before, after):
