@@ -148,10 +148,15 @@ class UsageStore:
 
     # --- 書き込み（ブロッキング） ---
     def _load_for_merge(self, month: str) -> dict[str, Any]:
+        """既存の月のデータを読む。中身が壊れていれば退避して空から数え直す。
+
+        読めないだけ（権限・一時的な I/O エラーなど）の場合は退避せずに OSError を送出し、
+        ``flush`` が増分を残して次回また書き込む。
+        """
         path = self.path_for(month)
         try:
             return validate_month(read_json_object(path)) if path.is_file() else _empty_month()
-        except (OSError, ValueError):
+        except ValueError:  # JSON として読めない・形式が不正（UnicodeDecodeError / JSONDecodeError を含む）
             corrupt = path.with_name(f"{path.name}.corrupt-{self._clock():%Y%m%d-%H%M%S}")
             logger.exception("使用量のファイルが壊れているため %s に退避し、この月を数え直します", corrupt.name)
             path.replace(corrupt)
