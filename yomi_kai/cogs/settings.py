@@ -141,15 +141,7 @@ class SettingsCog(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(state="on で読み上げる、off で読み上げない（省略すると現在の設定を表示）")
     async def announce(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
-        guild_id = ctx.guild.id
-        if state is None:
-            enabled = (await self.settings.aget(guild_id)).announce_voice
-            await reply(ctx, f"入退室の読み上げは現在{'オン' if enabled else 'オフ'}です")
-            return
-        enabled = state == "on"
-        await asyncio.to_thread(self.settings.set_announce_voice, guild_id, enabled)
-        await reply(ctx, f"入退室の読み上げを{'オン' if enabled else 'オフ'}にしました")
-        logger.info("入退室の読み上げを%sにしました (guild=%s)", "オン" if enabled else "オフ", guild_id)
+        await self._toggle(ctx, state, "announce_voice", "入退室の読み上げ")
 
     async def _toggle(self, ctx: commands.Context, state: str | None, key: str, label: str) -> None:
         """サーバー全体のオン/オフの設定。state を省略すると現在の設定を表示する。"""

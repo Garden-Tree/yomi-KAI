@@ -144,6 +144,23 @@ def _id_map(data: Mapping[str, Any], key: str) -> dict[int, int]:
     return {_snowflake(k, f"{key} のキー"): _snowflake(v, f"{key}[{k!r}]") for k, v in raw.items()}
 
 
+def _dump_ids(raw: dict[str, Any], key: str, ids: Iterable[int]) -> None:
+    """ID の一覧を文字列の配列として ``raw`` に書く（空ならキーごと消す）。"""
+    values = [str(i) for i in ids]
+    if values:
+        raw[key] = values
+    else:
+        raw.pop(key, None)
+
+
+def _dump_map(raw: dict[str, Any], key: str, mapping: Mapping[int, int]) -> None:
+    """ID -> ID の対応を文字列のオブジェクトとして ``raw`` に書く（空ならキーごと消す）。"""
+    if mapping:
+        raw[key] = {str(k): str(v) for k, v in mapping.items()}
+    else:
+        raw.pop(key, None)
+
+
 def should_read_author(*, is_self: bool, is_bot: bool, is_webhook: bool, read_bots: bool) -> bool:
     """発言者の種類で読み上げるか決める。
 
@@ -311,12 +328,6 @@ class SettingsStore:
 
         self._update(guild_id, mutate)
 
-    def set_announce_voice(self, guild_id: int, enabled: bool) -> None:
-        self.set_flag(guild_id, "announce_voice", enabled)
-
-    def set_read_name(self, guild_id: int, enabled: bool) -> None:
-        self.set_flag(guild_id, "read_name", enabled)
-
     def add_ignored(self, guild_id: int, key: str, target_id: int, limit: int = MAX_IGNORED) -> str:
         """読み上げないユーザー・ロールを登録する。"added" / "exists"（登録済み）/ "full"（上限）を返す。"""
         if key not in IGNORED_KEYS:
@@ -332,7 +343,7 @@ class SettingsStore:
             if len(ids) >= limit:
                 result = "full"
                 return False
-            raw[key] = [str(i) for i in [*ids, target_id]]
+            _dump_ids(raw, key, [*ids, target_id])
             return True
 
         self._update(guild_id, mutate)
@@ -347,11 +358,7 @@ class SettingsStore:
             ids = _id_list(raw, key)
             if target_id not in ids:
                 return False
-            remaining = [str(i) for i in ids if i != target_id]
-            if remaining:
-                raw[key] = remaining
-            else:
-                del raw[key]
+            _dump_ids(raw, key, [i for i in ids if i != target_id])
             return True
 
         return self._update(guild_id, mutate)
@@ -369,7 +376,7 @@ class SettingsStore:
                 result = "full"
                 return False
             mapping[voice_id] = text_id
-            raw["autojoin"] = {str(k): str(v) for k, v in mapping.items()}
+            _dump_map(raw, "autojoin", mapping)
             return True
 
         self._update(guild_id, mutate)
@@ -383,10 +390,7 @@ class SettingsStore:
             if voice_id not in mapping:
                 return False
             del mapping[voice_id]
-            if mapping:
-                raw["autojoin"] = {str(k): str(v) for k, v in mapping.items()}
-            else:
-                del raw["autojoin"]
+            _dump_map(raw, "autojoin", mapping)
             return True
 
         return self._update(guild_id, mutate)
