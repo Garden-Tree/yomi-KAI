@@ -16,8 +16,14 @@ from yomi_kai.main import YomiBot
 from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
-TOP_LEVEL = {"help", "c", "dc", "s", "voice", "speed", "announce", "dict", "sd", "credit"}
 GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
+GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots"}
+TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit", "status"}
+# 「サーバー管理」の権限が必要なコマンド
+ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots", "dict import"}
+# サブコマンド（プレフィックスでの名前）
+SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help", "dict export", "dict import"}
+SUBCOMMANDS |= {"ignore add", "ignore del", "ignore list", "autojoin add", "autojoin del", "autojoin list"}
 
 
 class StubEngine:
@@ -54,7 +60,7 @@ def setup_result(tmp_path_factory):
 
 def test_prefix_commands_are_hybrid(setup_result):
     prefix = setup_result["prefix"]
-    assert set(prefix) == TOP_LEVEL | {"dict add", "dict del", "dict list", "dict help"}
+    assert set(prefix) == TOP_LEVEL | SUBCOMMANDS
     for name, command in prefix.items():
         assert isinstance(command, (commands.HybridCommand, commands.HybridGroup)), name
 
@@ -63,7 +69,7 @@ def test_app_commands_registered_and_synced(setup_result):
     app = setup_result["app"]
     assert set(app) == TOP_LEVEL
     assert setup_result["sync_calls"] == 1
-    assert {c.name for c in app["dict"].commands} == {"add", "del", "list", "help"}
+    assert {c.name for c in app["dict"].commands} == {"add", "del", "list", "help", "export", "import"}
     for name, command in app.items():
         assert command.description and command.description != "…", name
         assert name.isascii() and name == name.lower()
@@ -169,3 +175,12 @@ def test_credit_follows_allowlist():
     assert [line for line in credit_lines(engine.speakers(), False) if line.startswith("VOICEVOX:")] == [
         "VOICEVOX:四国めたん"
     ]
+
+
+def test_admin_commands_require_manage_guild(setup_result):
+    prefix = setup_result["prefix"]
+    for name in ADMIN_ONLY:
+        predicates = [c.__qualname__ for c in prefix[name].checks]
+        assert any("has_guild_permissions" in q for q in predicates), name
+    target = {p.name: p for p in setup_result["app"]["ignore"].get_command("add").parameters}["target"]
+    assert target.type is discord.AppCommandOptionType.mentionable

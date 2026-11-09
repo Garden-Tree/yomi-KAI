@@ -20,7 +20,7 @@ from ..settings import DEFAULT_SPEED, SPEED_MAX, SPEED_MIN, SettingsStore
 from ..text import chunk_lines
 from ..tts import TTSEngine, find_speakers
 from ..ui import MAX_OPTIONS, DropdownView
-from .common import SAVE_FAILED_NOTICE, original_error, reply
+from .common import MANAGE_GUILD_NOTICE, SAVE_FAILED_NOTICE, original_error, reply
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,9 @@ class SettingsCog(commands.Cog):
                 await reply(ctx, SPEED_INVALID_NOTICE, private=True)
             else:
                 await self._invalid(ctx)
+            return
+        if isinstance(original_error(error), commands.MissingPermissions):
+            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
             return
         # 設定ファイルが壊れている・書き込めない場合（ログは Bot.on_command_error が出す）
         if isinstance(original_error(error), (OSError, ValueError)):
@@ -154,6 +157,47 @@ class SettingsCog(commands.Cog):
         await asyncio.to_thread(self.settings.set_announce_voice, guild_id, enabled)
         await reply(ctx, f"入退室の読み上げを{'オン' if enabled else 'オフ'}にしました")
         logger.info("入退室の読み上げを%sにしました (guild=%s)", "オン" if enabled else "オフ", guild_id)
+
+    async def _toggle(self, ctx: commands.Context, state: str | None, key: str, label: str) -> None:
+        """サーバー全体のオン/オフの設定。state を省略すると現在の設定を表示する。"""
+        guild_id = ctx.guild.id
+        if state is None:
+            enabled = getattr(await self.settings.aget(guild_id), key)
+            await reply(ctx, f"{label}は現在{'オン' if enabled else 'オフ'}です")
+            return
+        enabled = state == "on"
+        await asyncio.to_thread(self.settings.set_flag, guild_id, key, enabled)
+        await reply(ctx, f"{label}を{'オン' if enabled else 'オフ'}にしました")
+        logger.info("%sを%sにしました (guild=%s)", label, "オン" if enabled else "オフ", guild_id)
+
+    @commands.hybrid_command(
+        name="readname", description="発言者の名前を読み上げるか設定します（サーバー全体）", ignore_extra=False
+    )
+    @commands.guild_only()
+    @app_commands.describe(state="on で名前を読み上げる、off で読み上げない（省略すると現在の設定を表示）")
+    async def readname(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._toggle(ctx, state, "read_name", "名前の読み上げ")
+
+    @commands.hybrid_command(
+        name="speedup",
+        description="読み上げ待ちが溜まったときに速く読むか設定します（サーバー全体）",
+        ignore_extra=False,
+    )
+    @commands.guild_only()
+    @app_commands.describe(state="on で混雑時に速く読む、off で常に設定どおりの速度（省略すると現在の設定を表示）")
+    async def speedup(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._toggle(ctx, state, "queue_speedup", "混雑時の早読み")
+
+    @commands.hybrid_command(
+        name="readbots",
+        description="ほかの Bot・Webhook の発言も読み上げるか設定します（サーバー全体）",
+        ignore_extra=False,
+    )
+    @commands.guild_only()
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.describe(state="on で Bot の発言も読み上げる、off で読み上げない（省略すると現在の設定を表示）")
+    async def readbots(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._toggle(ctx, state, "read_bots", "Bot の発言の読み上げ")
 
     @commands.hybrid_command(
         name="speed", description="自分の読み上げ速度を設定します（0.5〜2.0倍）", ignore_extra=False

@@ -1,4 +1,4 @@
-"""辞書コマンド（dict add / del / list / help）。
+"""辞書コマンド（dict add / del / list / export / import / help）。
 
 hybrid グループなので ``y.dict add 単語 読み`` と ``/dict add`` のどちらでも同じ処理を行う。
 """
@@ -6,6 +6,8 @@ hybrid グループなので ``y.dict add 単語 読み`` と ``/dict add`` の�
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import logging
 import pprint
 
@@ -15,7 +17,7 @@ from discord.ext import commands
 
 from ..config import Config
 from ..dictionary import DictionaryStore
-from .common import EMBED_COLOR, reply
+from .common import EMBED_COLOR, MANAGE_GUILD_NOTICE, original_error, reply
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,35 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 1900
 
 
+# 読み込める辞書ファイルの大きさの上限
+MAX_IMPORT_BYTES = 100 * 1024
+
+
 def dict_full_notice(limit: int) -> str:
     return f"辞書の登録数が上限（{limit}件）に達しています。不要な単語を削除してください"
+
+
+def export_dictionary(words: dict[str, str]) -> bytes:
+    """辞書ファイルと同じ形式（{"単語": "読み"}、indent=2, ensure_ascii=False）の JSON。"""
+    return json.dumps(words, indent=2, ensure_ascii=False).encode("utf-8")
+
+
+def parse_dictionary_import(data: bytes) -> dict[str, str]:
+    """読み込む辞書ファイルを検証する。不正なら理由を添えて ValueError。"""
+    if len(data) > MAX_IMPORT_BYTES:
+        raise ValueError(f"ファイルが大きすぎます（{MAX_IMPORT_BYTES // 1024}KB まで）")
+    try:
+        parsed = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError("JSON として読み込めません") from None
+    if not isinstance(parsed, dict):
+        raise ValueError('{"単語": "読み", ...} の形式で書いてください')
+    entries: dict[str, str] = {}
+    for word, reading in parsed.items():
+        if not isinstance(reading, str) or not word.strip() or not reading.strip():
+            raise ValueError(f"「{word}」の読みが正しくありません（単語と読みはどちらも空でない文字列にしてください）")
+        entries[word] = reading
+    return entries
 
 
 class DictionaryCog(commands.Cog):
@@ -40,7 +69,10 @@ class DictionaryCog(commands.Cog):
         return True
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
-        # 引数の数が合わない（例: y.dict add 単語）
+        if isinstance(original_error(error), commands.MissingPermissions):
+            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
+            return
+        # 引数の数が合わない（例: y.dict add 単語、y.dict import でファイルを添付していない）
         if isinstance(error, commands.UserInputError):
             await self._invalid(ctx)
 
@@ -90,6 +122,38 @@ class DictionaryCog(commands.Cog):
         for i in range(0, len(body), CHUNK_SIZE):
             await reply(ctx, "```" + body[i : i + CHUNK_SIZE] + "```")
 
+    @dict_group.command(name="export", description="辞書を JSON ファイルで書き出します", ignore_extra=False)
+    async def dict_export(self, ctx: commands.Context) -> None:
+        words = dict((await self.store.aget(ctx.guild.id)).words)
+        file = discord.File(io.BytesIO(export_dictionary(words)), filename=f"dict-{ctx.guild.id}.json")
+        await reply(ctx, f"辞書を書き出しました（{len(words)}件）", file=file)
+        logger.info("辞書を書き出しました (guild=%s, %d件)", ctx.guild.id, len(words))
+
+    @dict_group.command(
+        name="import", description="JSON ファイルの辞書を読み込みます（同じ単語はファイルの読みで上書き）"
+    )
+    @commands.has_guild_permissions(manage_guild=True)
+    @app_commands.describe(attachment="dict export で書き出した形式の JSON ファイル（100KB まで）")
+    async def dict_import(self, ctx: commands.Context, attachment: discord.Attachment) -> None:
+        if attachment.size > MAX_IMPORT_BYTES:
+            await reply(ctx, f"ファイルが大きすぎます（{MAX_IMPORT_BYTES // 1024}KB まで）", private=True)
+            return
+        await ctx.defer()
+        try:
+            entries = parse_dictionary_import(await attachment.read())
+        except ValueError as e:
+            await reply(ctx, f"辞書を読み込めませんでした: {e}", private=True)
+            return
+        limit = self.config.max_dict_entries
+        added, updated, skipped = await asyncio.to_thread(self.store.merge, ctx.guild.id, entries, max_entries=limit)
+        message = f"辞書を読み込みました（追加 {added}件、更新 {updated}件）"
+        if skipped:
+            message += f"。登録数の上限（{limit}件）のため {skipped}件は追加しませんでした"
+        await reply(ctx, message)
+        logger.info(
+            "辞書を読み込みました (guild=%s, 追加%d件, 更新%d件, 上限で除外%d件)", ctx.guild.id, added, updated, skipped
+        )
+
     @dict_group.command(name="help", description="辞書機能のヘルプを表示します", ignore_extra=False)
     async def dict_help(self, ctx: commands.Context) -> None:
         prefix = self.config.prefix
@@ -99,6 +163,12 @@ class DictionaryCog(commands.Cog):
         )
         embed.add_field(name=f"{prefix}dict del `word`", value="`word`を辞書から削除します。", inline=False)
         embed.add_field(name=f"{prefix}dict list", value="現在登録されている辞書を表示します。", inline=False)
+        embed.add_field(name=f"{prefix}dict export", value="辞書を JSON ファイルで書き出します。", inline=False)
+        embed.add_field(
+            name=f"{prefix}dict import",
+            value="添付した JSON ファイルの辞書を読み込みます（サーバー管理の権限が必要）。",
+            inline=False,
+        )
         embed.add_field(name=f"{prefix}dict help", value="このヘルプを表示します。", inline=False)
         await reply(ctx, embed=embed)
         logger.info("dict helpを表示")

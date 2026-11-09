@@ -483,3 +483,46 @@ def test_afk_waits_for_remaining_chunks():
         assert vc.played == [wav("一。"), wav("二。"), wav("三。")]
 
     asyncio.run(run())
+
+
+# --- 混雑時の早読み ---
+
+
+def test_backlog_speed_steps_and_cap():
+    from yomi_kai.session import backlog_speed
+
+    assert backlog_speed(1.0, 0) == 1.0
+    assert backlog_speed(1.0, 2) == 1.0
+    assert backlog_speed(1.0, 3) == 1.25
+    assert backlog_speed(1.0, 5) == 1.25
+    assert backlog_speed(1.0, 6) == 1.5
+    assert backlog_speed(1.6, 6) == 2.0  # 上限 2.0 倍
+    assert backlog_speed(2.0, 10) == 2.0
+    assert backlog_speed(0.5, 3) == 0.625
+
+
+def test_backlog_speedup_applies_per_message_when_enabled():
+    engine = FakeEngine()
+
+    async def run(speedup):
+        session, _ = make_session(engine)
+        await session.start(FakeVoiceClient(play_time=0.0), FakeChannel())
+        # 先読みの数を1にして、メッセージごとの待ち件数が分かりやすいようにする
+        session.prefetch_chunks = 1
+        for i in range(7):
+            session.enqueue(f"m{i}。続き{i}", ZUNDA, 1.0, speedup=speedup)
+        await wait_until(lambda: len(engine.calls) >= 14 and not session.is_busy)
+        await session.close()
+
+    asyncio.run(run(True))
+    speeds = {text: speed for text, _, speed in engine.calls}
+    # m0 の読み始めは7件待ち → 1.5倍、残りのかたまり（続き0）も同じ速度
+    assert speeds["m0。"] == speeds["続き0"] == 1.5
+    assert speeds["m1。"] == 1.5  # 6件
+    assert speeds["m2。"] == 1.25  # 5件
+    assert speeds["m4。"] == 1.25  # 3件
+    assert speeds["m5。"] == speeds["m6。"] == 1.0
+
+    engine.calls.clear()
+    asyncio.run(run(False))
+    assert {speed for _, _, speed in engine.calls} == {1.0}

@@ -39,6 +39,10 @@ RUN chmod 755 /app/docker-entrypoint.sh && chown yomi:yomi /app
 
 # timezone mapping default
 ENV TZ=Asia/Tokyo
+# y.status に表示するバージョン（scripts/deploy.sh が docker compose build --build-arg GIT_SHA=<短いハッシュ> で渡す。
+# 渡さなければ「不明」と表示する）。コードのコピーより後に置き、値が変わっても下の層だけが再ビルドされるようにする
+ARG GIT_SHA=
+ENV YOMI_KAI_VERSION=$GIT_SHA
 # HEALTHCHECK（root で実行される）が yomi 所有のディレクトリに root 所有の .pyc を作らないようにする
 ENV PYTHONDONTWRITEBYTECODE=1
 

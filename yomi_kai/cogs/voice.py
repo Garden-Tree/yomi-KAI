@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Literal
 
 import discord
@@ -16,9 +17,19 @@ from discord.ext import commands
 from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
-from ..session import AFK_NOTICE, GuildSession, SourceFactory
-from ..settings import SettingsStore, resolve_voice, server_speaker
-from ..text import announce_text, build_read_text, describe_attachments, voice_transition
+from ..session import AFK_NOTICE, GuildSession, SourceFactory, SynthesisStats
+from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker, should_read_author
+from ..status import bot_version, status_fields
+from ..text import (
+    announce_text,
+    autojoin_allowed,
+    autojoin_text_channel,
+    build_read_text,
+    describe_attachments,
+    should_read_name,
+    voice_transition,
+    with_name,
+)
 from ..tts import TTSEngine
 from ..ui import DropdownView
 from ..usage import UsageStore
@@ -53,6 +64,15 @@ class VoiceCog(commands.Cog):
         self.source_factory = source_factory
         # guild.id -> GuildSession（サーバーごとの状態はここにだけ持つ）
         self.sessions: dict[int, GuildSession] = {}
+        # guild.id -> 直前に読み上げた発言の (ユーザーID, 時刻)。名前の読み上げを連投で省くために使う
+        self._last_reader: dict[int, tuple[int, float]] = {}
+        self._clock = time.monotonic
+        # guild.id -> 最後に自動切断した時刻（自動接続の再接続を少し待つ）
+        self._auto_disconnected_at: dict[int, float] = {}
+        # 自動接続の途中のサーバー（同時に複数人が入っても1回だけ接続する）
+        self._autojoining: set[int] = set()
+        # 音声合成の成否（全サーバー共通、y.status で表示）
+        self.stats = SynthesisStats()
 
     def get_session(self, guild_id: int) -> GuildSession:
         session = self.sessions.get(guild_id)
@@ -62,9 +82,14 @@ class VoiceCog(commands.Cog):
                 self.engine,
                 afk_time=self.config.afk_time,
                 source_factory=self.source_factory,
+                stats=self.stats,
             )
+            session.on_auto_close = lambda: self._note_auto_disconnect(guild_id)
             self.sessions[guild_id] = session
         return session
+
+    def _note_auto_disconnect(self, guild_id: int) -> None:
+        self._auto_disconnected_at[guild_id] = self._clock()
 
     async def cog_unload(self) -> None:
         for session in self.sessions.values():
@@ -116,10 +141,29 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(
+            name=f"{prefix}readname `on|off` / {prefix}speedup `on|off`",
+            value=(
+                "発言者の名前を読み上げるか（連投では省略）／読み上げ待ちが溜まったら速く読むかを設定します"
+                "（サーバー全体）。"
+            ),
+            inline=False,
+        )
+        help_embed.add_field(
             name=f"{prefix}dict",
             value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。",
             inline=False,
         )
+        help_embed.add_field(
+            name="サーバー管理者向け（「サーバー管理」の権限が必要）",
+            value=(
+                f"`{prefix}ignore add|del @ユーザー|@ロール`・`{prefix}ignore list`: 読み上げない人・ロール\n"
+                f"`{prefix}autojoin add|del`・`{prefix}autojoin list`: VC に人が入ったら自動で接続\n"
+                f"`{prefix}readbots on|off`: ほかの Bot・Webhook の発言も読み上げる\n"
+                f"`{prefix}dict import`: 添付した JSON の辞書を読み込む（`{prefix}dict export` で書き出し）"
+            ),
+            inline=False,
+        )
+        help_embed.add_field(name=f"{prefix}status", value="Bot の動作状況を表示します。", inline=False)
         help_embed.add_field(
             name=f"{prefix}sd",
             value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
@@ -181,6 +225,26 @@ class VoiceCog(commands.Cog):
         # 辞書を先読みしておき、読み上げ時にファイルI/Oが発生しないようにする
         await self.store.aget(ctx.guild.id)
 
+    @commands.hybrid_command(name="status", description="Bot の動作状況を表示します", ignore_extra=False)
+    async def status(self, ctx: commands.Context) -> None:
+        session = self.sessions.get(ctx.guild.id) if ctx.guild is not None else None
+        started_at = getattr(self.bot, "started_at", None)
+        fields = status_fields(
+            latency=self.bot.latency,
+            sessions=sum(1 for s in self.sessions.values() if s.is_connected),
+            queue=None if ctx.guild is None else (session.pending if session is not None else 0),
+            workers=self.config.voicevox_workers,
+            healthy=self.stats.healthy,
+            last_error=self.stats.last_error,
+            errors=self.stats.errors,
+            uptime=None if started_at is None else time.time() - started_at,
+            version=bot_version(),
+        )
+        embed = discord.Embed(title="yomi-KAI の状態", color=EMBED_COLOR)
+        for name, value in fields:
+            embed.add_field(name=name, value=value, inline=False)
+        await reply(ctx, embed=embed)
+
     @commands.hybrid_command(name="dc", description="ボイスチャンネルから切断します")
     @commands.guild_only()
     async def disconnect(self, ctx: commands.Context) -> None:
@@ -229,9 +293,12 @@ class VoiceCog(commands.Cog):
         # プレフィックス付きはコマンドとして Bot 側で処理されるので読み上げない
         if message.content.startswith(self.config.prefix):
             return
-        # botの発言は無視
-        if message.author.bot:
+        # 自分の発言は読まない（ほかの Bot・Webhook はサーバーの設定 read_bots で決める）
+        me = getattr(self.bot, "user", None)
+        is_self = me is not None and message.author.id == me.id
+        if is_self:
             return
+        is_webhook = getattr(message, "webhook_id", None) is not None
         # DMなど、サーバー外のメッセージは無視
         guild = message.guild
         if guild is None:
@@ -268,10 +335,23 @@ class VoiceCog(commands.Cog):
             return
 
         settings = await self.settings.aget(guild.id)
+        if not should_read_author(
+            is_self=is_self, is_bot=message.author.bot, is_webhook=is_webhook, read_bots=settings.read_bots
+        ):
+            return
+        # 読み上げないユーザー・ロール（y.ignore）
+        roles = getattr(message.author, "roles", None) or ()
+        if is_ignored(settings, message.author.id, (r.id for r in roles)):
+            return
         speaker, speed = resolve_voice(
             settings, message.author.id, self.available_speakers, self.engine.default_speaker
         )
-        if session.enqueue(read_msg, speaker, speed):
+        now = self._clock()
+        # 名前は本文の切り詰め後に付ける（MAX_READ_LENGTH は本文だけに適用）
+        if settings.read_name and should_read_name(self._last_reader.get(guild.id), message.author.id, now):
+            read_msg = with_name(read_msg, message.author.display_name)
+        if session.enqueue(read_msg, speaker, speed, speedup=settings.queue_speedup):
+            self._last_reader[guild.id] = (message.author.id, now)
             if self.usage is not None:
                 self.usage.record(guild.id, message.author.id, len(read_msg))
             logger.info(
@@ -294,9 +374,11 @@ class VoiceCog(commands.Cog):
             if after.channel is None:
                 # キック・切断された
                 logger.info("ボイスチャンネルから切断されました (guild=%s)", guild.id)
+                self._note_auto_disconnect(guild.id)
                 await session.close()
             elif before.channel != after.channel and len(after.channel.members) == 1:
                 # 誰もいないチャンネルへ移動させられた
+                self._note_auto_disconnect(guild.id)
                 await session.close(notice=AFK_NOTICE)
             return
 
@@ -306,6 +388,7 @@ class VoiceCog(commands.Cog):
             and voice_client.channel == before.channel
             and len(voice_client.channel.members) == 1
         ):  # ボイスチャンネルに自分だけ残っていたら
+            self._note_auto_disconnect(guild.id)
             if session is not None and session.is_connected:
                 await session.close(notice=AFK_NOTICE)
             else:
@@ -313,7 +396,54 @@ class VoiceCog(commands.Cog):
                 logger.info(AFK_NOTICE)
             return
 
+        if await self._maybe_autojoin(member, before, after):
+            return
         await self._announce_voice(member, before, after, session)
+
+    async def _maybe_autojoin(
+        self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
+    ) -> bool:
+        """登録されたボイスチャンネルにメンバーが入ったら自動で接続する。接続したら True。"""
+        guild = member.guild
+        session = self.sessions.get(guild.id)
+        connected = (session is not None and session.is_connected) or guild.voice_client is not None
+        if connected or guild.id in self._autojoining or after.channel is None:
+            return False
+        settings = await self.settings.aget(guild.id)
+        text_id = autojoin_text_channel(
+            settings.autojoin,
+            member_is_bot=member.bot,
+            before_id=before.channel.id if before.channel is not None else None,
+            after_id=after.channel.id,
+            connected=connected,
+        )
+        if text_id is None:
+            return False
+        if not autojoin_allowed(self._auto_disconnected_at.get(guild.id), self._clock()):
+            logger.info("自動切断の直後のため自動接続しません (guild=%s)", guild.id)
+            return False
+        text_channel = guild.get_channel(text_id)
+        if text_channel is None:
+            logger.warning("自動接続先のテキストチャンネル %s が見つかりません (guild=%s)", text_id, guild.id)
+            return False
+
+        voice_channel = after.channel
+        self._autojoining.add(guild.id)
+        try:
+            voice_client = await voice_channel.connect()
+            await self.get_session(guild.id).start(voice_client, text_channel)
+            embed = discord.Embed(title="自動接続しました", color=EMBED_COLOR)
+            embed.add_field(name="テキストチャンネル", value=f"{text_channel.name}", inline=False)
+            embed.add_field(name="ボイスチャンネル", value=f"{voice_channel.name}", inline=False)
+            await text_channel.send(embed=embed)
+            logger.info("%sに自動接続しました (guild=%s)", voice_channel.name, guild.id)
+        except Exception:
+            logger.exception("自動接続に失敗しました (guild=%s)", guild.id)
+            return False
+        finally:
+            self._autojoining.discard(guild.id)
+        await self.store.aget(guild.id)
+        return True
 
     async def _announce_voice(
         self,
@@ -339,7 +469,7 @@ class VoiceCog(commands.Cog):
             return
         text = announce_text(kind, member.display_name)
         speaker = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
-        if session.enqueue(text, speaker, 1.0):
+        if session.enqueue(text, speaker, 1.0, speedup=settings.queue_speedup):
             if self.usage is not None:
                 # 入退室はユーザーの使用量ではなく、サーバーの system_chars に数える
                 self.usage.record_system(member.guild.id, len(text))

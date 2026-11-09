@@ -5,6 +5,12 @@
     {
       "speaker": "サーバーの話者（未設定なら省略）",
       "announce_voice": true,
+      "read_name": false,
+      "queue_speedup": true,
+      "read_bots": false,
+      "ignored_users": ["<user_id>"],
+      "ignored_roles": ["<role_id>"],
+      "autojoin": {"<voice_channel_id>": "<text_channel_id>"},
       "users": {
         "<user_id>": {"speaker": "個人の話者", "speed": 1.2}
       }
@@ -22,7 +28,7 @@ import asyncio
 import logging
 import math
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,6 +36,12 @@ from typing import Any
 from .jsonfile import read_json_object, write_json_atomic
 
 logger = logging.getLogger(__name__)
+
+# 読み上げないユーザー・ロールの登録数の上限（それぞれ）
+MAX_IGNORED = 25
+IGNORED_KEYS = ("ignored_users", "ignored_roles")
+# 自動接続するボイスチャンネルの登録数の上限
+MAX_AUTOJOIN = 5
 
 SPEED_MIN = 0.5
 SPEED_MAX = 2.0
@@ -48,6 +60,17 @@ class GuildSettings:
     users: Mapping[int, UserSettings] = field(default_factory=dict)
     # ボイスチャンネルへの入退室を読み上げるか（未設定なら読み上げる）
     announce_voice: bool = True
+    # 発言者の名前を本文の前に読み上げるか（未設定なら読み上げない）
+    read_name: bool = False
+    # 読み上げ待ちが溜まったら速く読むか（未設定なら速く読む）
+    queue_speedup: bool = True
+    # ほかの Bot・Webhook の発言も読み上げるか（未設定なら読み上げない）
+    read_bots: bool = False
+    # 読み上げないユーザー・ロールの ID
+    ignored_users: frozenset[int] = frozenset()
+    ignored_roles: frozenset[int] = frozenset()
+    # 自動接続: ボイスチャンネルの ID -> 読み上げるテキストチャンネルの ID
+    autojoin: Mapping[int, int] = field(default_factory=dict)
 
     def user(self, user_id: int) -> UserSettings:
         return self.users.get(user_id) or UserSettings()
@@ -58,9 +81,13 @@ class GuildSettings:
         speaker = data.get("speaker")
         if speaker is not None and not isinstance(speaker, str):
             raise ValueError("speaker は文字列で指定してください")
-        announce_voice = data.get("announce_voice", True)
-        if not isinstance(announce_voice, bool):
-            raise ValueError("announce_voice は true / false で指定してください")
+        announce_voice = _flag(data, "announce_voice", True)
+        read_name = _flag(data, "read_name", False)
+        queue_speedup = _flag(data, "queue_speedup", True)
+        read_bots = _flag(data, "read_bots", False)
+        ignored_users = frozenset(_id_list(data, "ignored_users"))
+        ignored_roles = frozenset(_id_list(data, "ignored_roles"))
+        autojoin = _id_map(data, "autojoin")
         raw_users = data.get("users", {})
         if not isinstance(raw_users, dict):
             raise ValueError("users はオブジェクトで指定してください")
@@ -79,7 +106,68 @@ class GuildSettings:
             if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))):
                 raise ValueError(f"users[{key!r}].speed は数値で指定してください")
             users[user_id] = UserSettings(user_speaker, None if speed is None else float(speed))
-        return cls(speaker, users, announce_voice)
+        return cls(
+            speaker=speaker,
+            users=users,
+            announce_voice=announce_voice,
+            read_name=read_name,
+            queue_speedup=queue_speedup,
+            read_bots=read_bots,
+            ignored_users=ignored_users,
+            ignored_roles=ignored_roles,
+            autojoin=autojoin,
+        )
+
+
+def _snowflake(value: Any, where: str) -> int:
+    """ID（数字の文字列または整数）を int にする。"""
+    if isinstance(value, bool):
+        raise ValueError(f"{where} は ID で指定してください")
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value)
+    raise ValueError(f"{where} は ID で指定してください")
+
+
+def _id_list(data: Mapping[str, Any], key: str) -> list[int]:
+    raw = data.get(key, [])
+    if not isinstance(raw, list):
+        raise ValueError(f"{key} は配列で指定してください")
+    return [_snowflake(v, f"{key}[{i}]") for i, v in enumerate(raw)]
+
+
+def _id_map(data: Mapping[str, Any], key: str) -> dict[int, int]:
+    raw = data.get(key, {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"{key} はオブジェクトで指定してください")
+    return {_snowflake(k, f"{key} のキー"): _snowflake(v, f"{key}[{k!r}]") for k, v in raw.items()}
+
+
+def should_read_author(*, is_self: bool, is_bot: bool, is_webhook: bool, read_bots: bool) -> bool:
+    """発言者の種類で読み上げるか決める。
+
+    自分（この Bot）の発言は読まない。ほかの Bot・Webhook の発言は read_bots のときだけ読む。
+    """
+    if is_self:
+        return False
+    if is_bot or is_webhook:
+        return read_bots
+    return True
+
+
+def is_ignored(settings: GuildSettings, user_id: int, role_ids: Iterable[int]) -> bool:
+    """読み上げないユーザー、または読み上げないロールを持つメンバーなら True。"""
+    if user_id in settings.ignored_users:
+        return True
+    return not settings.ignored_roles.isdisjoint(role_ids)
+
+
+def _flag(data: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} は true / false で指定してください")
+    return value
 
 
 EMPTY_SETTINGS = GuildSettings()
@@ -190,12 +278,94 @@ class SettingsStore:
 
         return self._update(guild_id, mutate)
 
-    def set_announce_voice(self, guild_id: int, enabled: bool) -> None:
+    def set_flag(self, guild_id: int, key: str, enabled: bool) -> None:
+        """サーバー全体のオン/オフの設定（announce_voice / read_name など）を保存する。"""
+
         def mutate(raw: dict[str, Any]) -> bool:
-            raw["announce_voice"] = bool(enabled)
+            raw[key] = bool(enabled)
             return True
 
         self._update(guild_id, mutate)
+
+    def set_announce_voice(self, guild_id: int, enabled: bool) -> None:
+        self.set_flag(guild_id, "announce_voice", enabled)
+
+    def set_read_name(self, guild_id: int, enabled: bool) -> None:
+        self.set_flag(guild_id, "read_name", enabled)
+
+    def add_ignored(self, guild_id: int, key: str, target_id: int, limit: int = MAX_IGNORED) -> str:
+        """読み上げないユーザー・ロールを登録する。"added" / "exists"（登録済み）/ "full"（上限）を返す。"""
+        if key not in IGNORED_KEYS:
+            raise ValueError(f"unknown key: {key}")
+        result = "added"
+
+        def mutate(raw: dict[str, Any]) -> bool:
+            nonlocal result
+            ids = _id_list(raw, key)
+            if target_id in ids:
+                result = "exists"
+                return False
+            if len(ids) >= limit:
+                result = "full"
+                return False
+            raw[key] = [str(i) for i in [*ids, target_id]]
+            return True
+
+        self._update(guild_id, mutate)
+        return result
+
+    def remove_ignored(self, guild_id: int, key: str, target_id: int) -> bool:
+        """読み上げないユーザー・ロールの登録を外す。登録されていなければ False。"""
+        if key not in IGNORED_KEYS:
+            raise ValueError(f"unknown key: {key}")
+
+        def mutate(raw: dict[str, Any]) -> bool:
+            ids = _id_list(raw, key)
+            if target_id not in ids:
+                return False
+            remaining = [str(i) for i in ids if i != target_id]
+            if remaining:
+                raw[key] = remaining
+            else:
+                del raw[key]
+            return True
+
+        return self._update(guild_id, mutate)
+
+    def set_autojoin(self, guild_id: int, voice_id: int, text_id: int, limit: int = MAX_AUTOJOIN) -> str:
+        """自動接続を登録する。"added" / "updated"（登録済みのボイスチャンネル）/ "full"（上限）を返す。"""
+        result = "added"
+
+        def mutate(raw: dict[str, Any]) -> bool:
+            nonlocal result
+            mapping = _id_map(raw, "autojoin")
+            if voice_id in mapping:
+                result = "updated"
+            elif len(mapping) >= limit:
+                result = "full"
+                return False
+            mapping[voice_id] = text_id
+            raw["autojoin"] = {str(k): str(v) for k, v in mapping.items()}
+            return True
+
+        self._update(guild_id, mutate)
+        return result
+
+    def remove_autojoin(self, guild_id: int, voice_id: int) -> bool:
+        """自動接続の登録を外す。登録されていなければ False。"""
+
+        def mutate(raw: dict[str, Any]) -> bool:
+            mapping = _id_map(raw, "autojoin")
+            if voice_id not in mapping:
+                return False
+            del mapping[voice_id]
+            if mapping:
+                raw["autojoin"] = {str(k): str(v) for k, v in mapping.items()}
+            else:
+                del raw["autojoin"]
+            return True
+
+        return self._update(guild_id, mutate)
 
     def _set_user_field(self, guild_id: int, user_id: int, key: str, value: Any) -> None:
         def mutate(raw: dict[str, Any]) -> bool:

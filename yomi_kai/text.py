@@ -303,6 +303,49 @@ def announce_text(kind: str, display_name: str) -> str:
     return f"{display_name}さんが{'入室' if kind == JOIN else '退室'}しました"
 
 
+# 同じ人が続けて発言した場合、この秒数以内なら名前を読み上げない
+NAME_SKIP_SECONDS = 30.0
+
+
+def should_read_name(
+    previous: tuple[int, float] | None, user_id: int, now: float, window: float = NAME_SKIP_SECONDS
+) -> bool:
+    """名前を読み上げるか。``previous`` はそのサーバーで直前に読み上げた発言の (ユーザーID, 時刻)。
+
+    同じ人の発言が ``window`` 秒以内に続いた場合は読み上げない（連投のたびに名前を読まない）。
+    """
+    if previous is None:
+        return True
+    last_user, last_time = previous
+    return last_user != user_id or now - last_time > window
+
+
+# 自動切断のあと、この秒数のあいだは自動接続しない（接続と切断を繰り返さないように）
+AUTOJOIN_COOLDOWN = 30.0
+
+
+def autojoin_allowed(last_auto_disconnect: float | None, now: float, cooldown: float = AUTOJOIN_COOLDOWN) -> bool:
+    """自動切断から ``cooldown`` 秒以上たっていれば（または一度も自動切断していなければ）自動接続してよい。"""
+    return last_auto_disconnect is None or now - last_auto_disconnect >= cooldown
+
+
+def autojoin_text_channel(
+    autojoin: Mapping[int, int], *, member_is_bot: bool, before_id: int | None, after_id: int | None, connected: bool
+) -> int | None:
+    """自動接続するなら読み上げるテキストチャンネルの ID、しないなら None。
+
+    Bot 以外のメンバーが、登録されたボイスチャンネルに入った（移動を含む）とき、Bot がまだ接続していなければ接続する。
+    """
+    if member_is_bot or connected or after_id is None or before_id == after_id:
+        return None
+    return autojoin.get(after_id)
+
+
+def with_name(text: str, name: str) -> str:
+    """本文の前に「名前、」を付ける（切り詰めは本文だけに済ませてから呼ぶ）。"""
+    return f"{name}、{text}"
+
+
 def chunk_lines(lines: Sequence[str], limit: int = 1900) -> list[str]:
     """行を改行でつなぎ、1つあたり ``limit`` 文字以内のかたまりに分ける（Discord の2000文字制限対策）。
 
