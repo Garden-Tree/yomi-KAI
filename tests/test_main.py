@@ -17,6 +17,12 @@ def make_bot(tmp_path):
     return YomiBot(config, StubEngine(), DictionaryStore(tmp_path / "dict"), SettingsStore(tmp_path / "settings"))
 
 
+def test_bot_does_not_ping_by_default(tmp_path):
+    mentions = make_bot(tmp_path).allowed_mentions
+    assert mentions is not None
+    assert not mentions.everyone and not mentions.users and not mentions.roles and not mentions.replied_user
+
+
 class RecordingLoop:
     def __init__(self):
         self.handlers = {}

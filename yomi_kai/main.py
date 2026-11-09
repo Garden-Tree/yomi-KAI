@@ -79,7 +79,13 @@ class YomiBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
-        super().__init__(command_prefix=config.prefix, intents=intents, help_command=None)
+        # コマンドは利用者の入力を返すことがある（例: y.sd @everyone）ので、メンションで通知しない
+        super().__init__(
+            command_prefix=config.prefix,
+            intents=intents,
+            help_command=None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
         self.config = config
         self.engine = engine
         self.store = store
