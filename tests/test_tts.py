@@ -225,3 +225,89 @@ def test_find_speakers_normalizes_width_and_case():
 def test_find_speakers_not_found():
     assert find_speakers("存在しない", NAMES) == []
     assert find_speakers("  ", NAMES) == []
+
+
+# --- 非同期の合成（synthesize_async）と取り消し ---
+
+
+class SlowFakeSynthesizer(FakeSynthesizer):
+    """「遅い」はずっと終わらない偽物（取り消されるまで Synthesizer を使い続ける）。"""
+
+    async def tts(self, text, style_id):
+        with self.own, self.overall:
+            self.calls += 1
+            await asyncio.sleep(30 if text == "遅い" else 0.01)
+        return f"wav:{text}".encode()
+
+
+def test_voicevox_async_cancel_returns_synthesizer_to_pool():
+    voicevox = _import_voicevox_module()
+    engine = object.__new__(voicevox.VoicevoxEngine)
+    fake = SlowFakeSynthesizer(Overlap())
+    engine._loop = LoopThread("test-voicevox")
+
+    async def make_pool():
+        return InstancePool([fake])
+
+    engine._pool = engine._loop.run(make_pool())
+    engine._style_ids = {"ずんだもん": 3}
+    engine._default = "ずんだもん"
+
+    async def run():
+        slow = asyncio.create_task(engine.synthesize_async("遅い", "ずんだもん"))
+        while fake.own.active == 0:
+            await asyncio.sleep(0.005)
+        slow.cancel()
+        # Synthesizer は1つだけ。取り消しが合成まで伝わっていれば、次の合成はすぐ終わる
+        return await asyncio.wait_for(engine.synthesize_async("次", "ずんだもん"), timeout=2.0)
+
+    try:
+        assert asyncio.run(run()) == "wav:次".encode()
+    finally:
+        engine._loop.stop()
+
+
+class AsyncRecordingEngine(RecordingEngine):
+    def __init__(self, names):
+        super().__init__(names)
+        self.async_calls = []
+
+    async def synthesize_async(self, text, speaker, speed=1.0):
+        self.async_calls.append((text, speaker, speed))
+        return b"async"
+
+
+def test_wrappers_forward_synthesize_async():
+    from yomi_kai.tts import FilteredEngine, synthesize_async
+
+    google = AsyncRecordingEngine(["ja-JP-Wavenet-A"])
+    voicevox = AsyncRecordingEngine(["ずんだもん", "春日部つむぎ"])
+    composite = CompositeEngine([google, voicevox])
+    filtered = FilteredEngine(composite, ["春日部つむぎ", "ja-JP-Wavenet-A"])
+
+    async def run():
+        return [
+            await synthesize_async(filtered, "一", "春日部つむぎ", 1.5),
+            await synthesize_async(filtered, "二", "ずんだもん"),  # 許可されていない → 既定の話者
+        ]
+
+    assert asyncio.run(run()) == [b"async", b"async"]
+    assert voicevox.async_calls == [("一", "春日部つむぎ", 1.5)]
+    assert google.async_calls == [("二", "ja-JP-Wavenet-A", 1.0)]
+    assert voicevox.calls == google.calls == []  # 同期の synthesize は使わない
+
+
+def test_sync_engine_runs_on_dedicated_synthesis_threads():
+    from yomi_kai.tts import synthesize_async
+
+    threads = []
+
+    class SyncEngine(RecordingEngine):
+        def synthesize(self, text, speaker, speed=1.0):
+            threads.append(threading.current_thread().name)
+            return super().synthesize(text, speaker, speed)
+
+    engine = SyncEngine(["ずんだもん"])
+    assert asyncio.run(synthesize_async(engine, "やあ", "ずんだもん")) == b"wav"
+    # 既定の executor（設定・辞書のファイル I/O が使う）ではなく、合成専用のスレッドで動く
+    assert threads and threads[0].startswith("yomi-kai-tts")

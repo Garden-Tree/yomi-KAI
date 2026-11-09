@@ -6,8 +6,8 @@
 
 メッセージは ``text.split_for_synthesis`` で文単位のかたまりに分けてから合成する（長文でも最初の文から
 すぐに再生を始められる）。ワーカーは、再生前のかたまりが最大 ``PREFETCH_CHUNKS`` 個になるよう、メッセージを
-またいで次のかたまりの合成を並行に始め（``asyncio.to_thread``）、かたまりを必ずキュー投入順に1つずつ再生する。
-スキップはメッセージ単位（残りのかたまりもまとめて飛ばす）。
+またいで次のかたまりの合成を並行に始め（``tts.synthesize_async``）、かたまりを必ずキュー投入順に1つずつ再生する。
+スキップはメッセージ単位（残りのかたまりもまとめて飛ばす）。スキップすると合成中のタスクも取り消す。
 
 混雑時の早読み: ``enqueue(..., speedup=True)`` で積んだメッセージは、合成を始める時点で、合成を始めていない
 メッセージ（そのメッセージ自身を含む）が3件以上なら1.25倍、6件以上なら1.5倍の速度にする（上限2.0倍）。
@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .text import split_for_synthesis
-from .tts import TTSEngine
+from .tts import TTSEngine, synthesize_async
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +314,7 @@ class GuildSession:
         return not message.skipped and message.epoch == self._epoch
 
     async def _synthesize(self, text: str, speaker: str, speed: float) -> bytes:
-        return await asyncio.to_thread(self.engine.synthesize, text, speaker, speed)
+        return await synthesize_async(self.engine, text, speaker, speed)
 
     def _fill_pipeline(self) -> None:
         """再生前のかたまりが prefetch_chunks 個になるまで、次のかたまりの合成を始める（メッセージをまたぐ）。"""

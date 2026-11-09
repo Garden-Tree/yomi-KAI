@@ -644,3 +644,40 @@ def test_pending_excludes_skipped_messages():
         await session.close()
 
     asyncio.run(run())
+
+
+class SinglePoolAsyncEngine(FakeEngine):
+    """Synthesizer が1つだけの VOICEVOX を真似た非同期の偽エンジン（取り消すと Synthesizer が空く）。"""
+
+    def __init__(self, delays=None):
+        super().__init__(delays)
+        self._busy = None
+
+    async def synthesize_async(self, text, speaker, speed=1.0):
+        if self._busy is None:
+            self._busy = asyncio.Semaphore(1)
+        async with self._busy:
+            self.calls.append((text, speaker, speed))
+            await asyncio.sleep(self.delays.get(text, 0))
+            return f"{speaker}:{text}".encode()
+
+    def synthesize(self, text, speaker, speed=1.0):
+        raise AssertionError("GuildSession は synthesize_async を使う")
+
+
+def test_new_message_after_skip_all_is_not_delayed_by_skipped_synthesis():
+    async def run():
+        session, _ = make_session(SinglePoolAsyncEngine(delays={"とても遅い": 10.0}))
+        vc = FakeVoiceClient()
+        await session.start(vc, FakeChannel())
+        session.enqueue("とても遅い", ZUNDA)
+        await asyncio.sleep(0.05)  # 合成中（Synthesizer を使っている）
+        assert session.skip_all() == 1
+        session.enqueue("次", ZUNDA)
+        started = time.monotonic()
+        await wait_until(lambda: len(vc.played) == 1, timeout=2.0)
+        assert time.monotonic() - started < 1.0
+        assert vc.played == [wav("次")]
+        await session.close()
+
+    asyncio.run(run())
