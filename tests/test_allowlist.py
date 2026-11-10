@@ -40,6 +40,23 @@ def test_filters_speakers_in_engine_order():
     assert engine.unknown == []
 
 
+def test_styles_are_allowed_by_their_label():
+    # 「ずんだもん」はノーマルスタイルだけ。ほかのスタイルは y.voice list の名前で個別に許可する
+    engine = FilteredEngine(RecordingEngine(NAMES), ["ずんだもん"])
+    assert [s.name for s in engine.speakers()] == ["ずんだもん"]
+    engine = FilteredEngine(RecordingEngine(NAMES), ["ずんだもん", "ずんだもん（あまあま）"])
+    assert [s.name for s in engine.speakers()] == ["ずんだもん", "ずんだもん（あまあま）"]
+
+
+def test_allowlist_ignores_full_and_half_width_differences():
+    engine = FilteredEngine(RecordingEngine(NAMES), ["ずんだもん(あまあま)", "四国めたん"])
+    assert [s.name for s in engine.speakers()] == ["四国めたん", "ずんだもん（あまあま）"]
+    assert engine.unknown == []
+    inner = engine._engine
+    engine.synthesize("やあ", "ずんだもん（あまあま）")
+    assert inner.calls == [("やあ", "ずんだもん（あまあま）", 1.0)]
+
+
 def test_default_falls_back_to_first_allowed_speaker():
     engine = FilteredEngine(RecordingEngine(NAMES), ["四国めたん", "春日部つむぎ"])
     assert engine.default_speaker == "春日部つむぎ"
