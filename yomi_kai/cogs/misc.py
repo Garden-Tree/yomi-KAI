@@ -1,4 +1,8 @@
-"""「突然の死」コマンド（sd）と、音声のクレジット表記（credit）。``y.sd`` と ``/sd`` のどちらでも使える。"""
+"""「突然の死」コマンド（sd）と、音声のクレジット表記（credit）。``y.sd`` と ``/sd`` のどちらでも使える。
+
+sd は読み上げと関係ない機能なので、config.ini の ``ENABLE_SUDDEN_DEATH = False`` で登録しないようにできる
+（:class:`SuddenDeathCog` を追加しない）。credit は常に使える。
+"""
 
 from __future__ import annotations
 
@@ -30,11 +34,12 @@ def credit_lines(speakers: Iterable[Speaker], use_google_tts: bool) -> list[str]
     return lines
 
 
-class MiscCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, engine: TTSEngine) -> None:
+class SuddenDeathCog(commands.Cog):
+    """「突然の死」コマンド（sd）。ENABLE_SUDDEN_DEATH = False なら Bot に追加しない。"""
+
+    def __init__(self, bot: commands.Bot, config: Config) -> None:
         self.bot = bot
         self.config = config
-        self.engine = engine
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         # 引数が多すぎる（例: y.sd a b）
@@ -62,6 +67,17 @@ class MiscCog(commands.Cog):
             logger.info("sd helpを表示")
             return
         await reply(ctx, gen_sd_text(word))
+
+
+class MiscCog(commands.Cog):
+    def __init__(self, bot: commands.Bot, config: Config, engine: TTSEngine) -> None:
+        self.bot = bot
+        self.config = config
+        self.engine = engine
+
+    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        # 引数が多すぎる（例: y.credit a）
+        await handle_command_error(ctx, error, invalid_notice=invalid_command_notice(self.config.prefix))
 
     @commands.hybrid_command(
         name="credit",

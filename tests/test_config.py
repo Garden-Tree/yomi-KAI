@@ -125,3 +125,20 @@ def test_invalid_ints(tmp_path, line, key):
     path.write_text(text, encoding="utf-8")
     with pytest.raises(ConfigError, match=key):
         load_config(path)
+
+
+def test_enable_sudden_death(tmp_path):
+    assert load(tmp_path).enable_sudden_death is True
+    assert load(tmp_path, "ENABLE_SUDDEN_DEATH = False\n").enable_sudden_death is False
+    with pytest.raises(ConfigError, match="ENABLE_SUDDEN_DEATH"):
+        load(tmp_path, "ENABLE_SUDDEN_DEATH = maybe\n")
+
+
+def test_sd_msg_optional_when_sudden_death_disabled(tmp_path):
+    path = tmp_path / "config.ini"
+    base = BASE.replace("SD_MSG = 突然の死\n", "")
+    path.write_text(base + "ENABLE_SUDDEN_DEATH = False\n", encoding="utf-8")
+    assert load_config(path).enable_sudden_death is False
+    path.write_text(base, encoding="utf-8")
+    with pytest.raises(ConfigError, match="SD_MSG"):
+        load_config(path)

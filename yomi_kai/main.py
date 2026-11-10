@@ -224,7 +224,7 @@ class YomiBot(commands.Bot):
 
         from .cogs.admin import AdminCog
         from .cogs.dictionary import DictionaryCog
-        from .cogs.misc import MiscCog
+        from .cogs.misc import MiscCog, SuddenDeathCog
         from .cogs.settings import SettingsCog
         from .cogs.voice import VoiceCog
         from .session import ffmpeg_available, ffmpeg_source_factory, find_ffmpeg
@@ -251,6 +251,9 @@ class YomiBot(commands.Bot):
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
         await self.add_cog(DictionaryCog(self, self.config, self.store))
         await self.add_cog(MiscCog(self, self.config, self.engine))
+        if self.config.enable_sudden_death:
+            # 読み上げと関係ない機能なので、公開版では ENABLE_SUDDEN_DEATH = False で外せる
+            await self.add_cog(SuddenDeathCog(self, self.config))
         await self.add_cog(AdminCog(self, self.config, self.settings))
         await self.sync_app_commands()
 

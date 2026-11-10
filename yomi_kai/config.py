@@ -8,7 +8,9 @@ VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
 LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、RECORD_USAGE（使用量を記録するか、既定 False）、
 USAGE_DIR（使用量の保存先、既定 usage）、
 MAX_DICT_ENTRIES（辞書の登録数の上限、既定 0 = 無制限）、SPEAKER_ALLOWLIST（使える話者、既定は全話者）、
-BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）を追加している。
+BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）、
+ENABLE_SUDDEN_DEATH（「突然の死」コマンド sd を使えるようにするか、既定 True。False なら SD_MSG は省略可）
+を追加している。
 """
 
 from __future__ import annotations
@@ -50,6 +52,8 @@ class Config:
     speaker_allowlist: tuple[str, ...] = ()
     # 利用を断るサーバーの ID を1行に1つ書いたファイル（無ければ何もブロックしない）
     blocked_guilds_file: str = "settings/blocked_guilds.txt"
+    # False なら「突然の死」コマンド（y.sd・/sd）を登録しない
+    enable_sudden_death: bool = True
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
@@ -59,7 +63,7 @@ class Config:
             f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
             f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
-            f"blocked_guilds_file={self.blocked_guilds_file!r})"
+            f"blocked_guilds_file={self.blocked_guilds_file!r}, enable_sudden_death={self.enable_sudden_death})"
         )
 
 
@@ -137,7 +141,9 @@ def load_config(path: str | Path = "config.ini") -> Config:
         google_api_key = _required(section, "GOOGLE_API_KEY") if use_google_tts else section.get("GOOGLE_API_KEY")
         prefix = _required(section, "PREFIX")
         afk_time = _int(section, "AFK_TIME", None, 1, None, "秒数（整数）")
-        sd_msg = _required(section, "SD_MSG")
+        enable_sudden_death = _boolean(section, "ENABLE_SUDDEN_DEATH", True)
+        # sd を使わないなら SD_MSG は無くてもよい
+        sd_msg = _required(section, "SD_MSG") if enable_sudden_death else (section.get("SD_MSG") or "").strip()
         load_all = _boolean(section, "VOICEVOX_LOAD_ALL_MODELS", False)
         max_read_length = _int(section, "MAX_READ_LENGTH", 100, 0, None, "整数（0 で無制限）")
         alert_webhook_url = (section.get("ALERT_WEBHOOK_URL") or "").strip() or None
@@ -176,4 +182,5 @@ def load_config(path: str | Path = "config.ini") -> Config:
         max_dict_entries=max_dict_entries,
         speaker_allowlist=speaker_allowlist,
         blocked_guilds_file=blocked_guilds_file,
+        enable_sudden_death=enable_sudden_death,
     )

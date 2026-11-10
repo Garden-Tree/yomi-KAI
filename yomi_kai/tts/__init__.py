@@ -164,12 +164,14 @@ class FilteredEngine:
 
     def __init__(self, engine: TTSEngine, allowed: Iterable[str]) -> None:
         allowed = list(dict.fromkeys(allowed))
-        available = {s.name for s in engine.speakers()}
-        allowed_set = set(allowed)
+        # スタイルは「ずんだもん（あまあま）」のように y.voice list の名前で書く。
+        # 全角・半角の違い（「（」と「(」など）は y.voice と同じく無視する
+        available = {_normalize(s.name) for s in engine.speakers()}
+        allowed_set = {_normalize(name) for name in allowed}
         #: 許可リストにあるが、エンジンに存在しない名前（指定順）
-        self.unknown = [name for name in allowed if name not in available]
+        self.unknown = [name for name in allowed if _normalize(name) not in available]
         self._engine = engine
-        self._speakers = [s for s in engine.speakers() if s.name in allowed_set]
+        self._speakers = [s for s in engine.speakers() if _normalize(s.name) in allowed_set]
         if not self._speakers:
             raise ValueError("許可された話者がありません")
         names = {s.name for s in self._speakers}

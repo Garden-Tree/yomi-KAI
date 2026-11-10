@@ -19,7 +19,7 @@ from discord.ext import commands
 from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
-from ..session import AFK_NOTICE, GuildSession, SourceFactory, SynthesisStats
+from ..session import AFK_NOTICE, GuildSession, LatencyStats, SourceFactory, SynthesisStats
 from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker, should_read_author
 from ..status import bot_version, status_fields
 from ..text import (
@@ -88,6 +88,8 @@ class VoiceCog(commands.Cog):
         self._autojoining: set[int] = set()
         # 音声合成の成否（全サーバー共通、y.status で表示）
         self.stats = SynthesisStats()
+        # 受信から読み上げの開始までの時間（サーバーごとに直近100件、y.status で表示）
+        self.latency = LatencyStats()
 
     def get_session(self, guild_id: int) -> GuildSession:
         session = self.sessions.get(guild_id)
@@ -98,6 +100,7 @@ class VoiceCog(commands.Cog):
                 afk_time=self.config.afk_time,
                 source_factory=self.source_factory,
                 stats=self.stats,
+                latency=self.latency,
             )
             session.on_auto_close = lambda: self._note_auto_disconnect(guild_id)
             self.sessions[guild_id] = session
@@ -180,11 +183,12 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(name=f"{prefix}status", value="Bot の動作状況を表示します。", inline=False)
-        help_embed.add_field(
-            name=f"{prefix}sd",
-            value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
-            inline=False,
-        )
+        if self.config.enable_sudden_death:
+            help_embed.add_field(
+                name=f"{prefix}sd",
+                value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
+                inline=False,
+            )
         help_embed.add_field(
             name=f"{prefix}credit",
             value="読み上げ音声のクレジット（VOICEVOX:ずんだもん など）を表示します。",
@@ -301,6 +305,7 @@ class VoiceCog(commands.Cog):
             healthy=self.stats.healthy,
             last_error=self.stats.last_error,
             errors=self.stats.errors,
+            speech_latency=self.latency.summary(),
             uptime=None if started_at is None else time.time() - started_at,
             version=bot_version(),
         )
@@ -350,6 +355,8 @@ class VoiceCog(commands.Cog):
     # --- イベント ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        # 受信した時刻（読み上げの開始までの時間を測る。読み上げなかったメッセージは数えない）
+        received_at = self.latency.clock()
         # プレフィックス付きはコマンドとして Bot 側で処理されるので読み上げない
         if message.content.startswith(self.config.prefix):
             return
@@ -412,7 +419,7 @@ class VoiceCog(commands.Cog):
         # 名前は本文の切り詰め後に付ける（MAX_READ_LENGTH は本文だけに適用）
         if settings.read_name and should_read_name(self._last_reader.get(guild.id), message.author.id, now):
             read_msg = with_name(read_msg, message.author.display_name)
-        if session.enqueue(read_msg, speaker, speed, speedup=settings.queue_speedup):
+        if session.enqueue(read_msg, speaker, speed, speedup=settings.queue_speedup, received_at=received_at):
             self._last_reader[guild.id] = (message.author.id, now)
             if self.usage is not None:
                 self.usage.record(guild.id, message.author.id, len(read_msg))
@@ -511,6 +518,7 @@ class VoiceCog(commands.Cog):
             await session.close()
         self._last_reader.pop(guild.id, None)
         self._auto_disconnected_at.pop(guild.id, None)
+        self.latency.forget(guild.id)
         # 設定・辞書のキャッシュも捨てる（evict を持つストアだけ）
         for store in (self.settings, self.store):
             evict = getattr(store, "evict", None)

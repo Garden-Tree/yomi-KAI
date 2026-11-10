@@ -42,7 +42,7 @@ yomi_kai/
     voice.py           # help / c / dc / s / status コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・自動接続・入退室の読み上げ）
     settings.py        # voice / speed（ユーザーごとの話者・速度）、announce / readname / speedup / readbots（サーバー全体のオン/オフ）
     dictionary.py      # dict add / del / list / export / import / help
-    misc.py            # sd（突然の死）、credit（音声のクレジット表記）
+    misc.py            # sd（突然の死、ENABLE_SUDDEN_DEATH = False なら Cog ごと追加しない）、credit（音声のクレジット表記）
     admin.py           # サーバー管理者向け: ignore（読み上げない人・ロール）、autojoin（自動接続）
 docker-entrypoint.sh   # Docker: ボリュームの所有者を直してから一般ユーザーで起動
 tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist）
@@ -113,7 +113,8 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 * 引数の過不足・不正な値（`commands.UserInputError`）は各 Cog の `cog_command_error` が従来と同じ案内（「コマンドが間違っています」など）を返します（`ignore_extra=False` で余分な引数もエラーにする）。設定・辞書ファイルの読み書きの失敗（`OSError` / `ValueError`）も「設定の保存に失敗しました」「辞書の保存に失敗しました」を本人にだけ返します（返さないとスラッシュが「考え中…」のまま残る）。判定は共通の `cogs/common.handle_command_error` で行い、プレフィックスの `CommandInvokeError` とスラッシュの `HybridCommandError` を `original_error()` でほどいてから判定します。
 * **サーバー管理者向けのコマンド**: `ignore add|del`・`autojoin add|del`・`readbots`・`dict import` は `commands.has_guild_permissions(manage_guild=True)` で「サーバー管理」の権限を求めます（スラッシュでも hybrid コマンドのチェックとして働く）。権限がなければ各 Cog の `cog_command_error` が「このコマンドを使うには「サーバー管理」の権限が必要です」を返し（スラッシュでは ephemeral）、`Bot.on_command_error` は `CheckFailure` をエラーとして記録しません。`ignore` の対象は `discord.Member | discord.Role`（スラッシュではメンション可能な値の選択肢）、`dict import` のファイルは `discord.Attachment`（プレフィックスではメッセージの添付、スラッシュでは `attachment` 引数）です。
 * **辞書の書き出し・読み込み**: `dict export` は辞書ファイルと同じ形式（indent=2, ensure_ascii=False）の `dict-{guild_id}.json` を添付します。`dict import` は100KBまでの JSON を `parse_dictionary_import()` で検証し（オブジェクトで、単語・読みとも空でない文字列）、`DictionaryStore.merge()` がロックの中でまとめて書き込みます（同じ単語はファイルの読みで上書き、`MAX_DICT_ENTRIES` に収まる分だけ追加し、飛ばした件数を返す）。
-* **`status`**: Discord の応答時間（`bot.latency`）、接続中のセッション数、このサーバーの合成待ちのメッセージ数（`session.pending`）、`VOICEVOX_WORKERS`、合成の状態（全セッション共通の `SynthesisStats` が最後の成功・失敗の時刻と失敗回数を持ち、最後の失敗のあとに成功していれば正常）、稼働時間（`YomiBot.started_at`）、バージョン（環境変数 `YOMI_KAI_VERSION`、無ければ「不明」）を表示します。整形は `status.py` の純粋関数です。
+* **`status`**: Discord の応答時間（`bot.latency`）、接続中のセッション数、このサーバーの合成待ちのメッセージ数（`session.pending`）、`VOICEVOX_WORKERS`、合成の状態（全セッション共通の `SynthesisStats` が最後の成功・失敗の時刻と失敗回数を持ち、最後の失敗のあとに成功していれば正常）、読み上げの開始までの時間（下記）、稼働時間（`YomiBot.started_at`）、バージョン（環境変数 `YOMI_KAI_VERSION`、無ければ「不明」）を表示します。整形は `status.py` の純粋関数です。
+  * 読み上げの開始までの時間: `VoiceCog.on_message` の冒頭で単調時計（`LatencyStats.clock`、既定 `time.monotonic`）の時刻を取り、`enqueue(received_at=...)` でメッセージに持たせます。`GuildSession._play` が、そのメッセージの最初のかたまりについて `voice_client.play()` を呼び終えた時点で差を `LatencyStats` に記録し、DEBUG ログにも出します（本文は持たない）。合成・再生の開始に失敗したメッセージ、スキップして再生しなかったメッセージ、入退室の読み上げは数えません。`LatencyStats` は全セッション共通で、サーバーごとに直近100件（`deque(maxlen=100)`）を持ち、`y.status` では全サーバー分をまとめた中央値・95パーセンタイル（最近傍順位法）・件数を表示します。Discord からイベントが届くまでの時間と、ffmpeg の起動から最初の音声パケットが届くまでの時間は含みません。
 * `setup_hook` で Cog を登録したあと `bot.tree.sync()` でグローバルに同期し、件数をログに出します（失敗してもログに出して起動は続ける）。グローバルコマンドは Discord のクライアントに反映されるまで時間がかかることがあり、招待時に `applications.commands` スコープが必要です。メッセージの読み上げには引き続き Message Content Intent が必要です。
 
 ### 2.5 接続監視（`health.py`）

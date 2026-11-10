@@ -38,11 +38,7 @@ class StubEngine:
         return b""
 
 
-@pytest.fixture(scope="module")
-def setup_result(tmp_path_factory):
-    tmp_path = tmp_path_factory.mktemp("bot")
-    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="突然の死")
-
+def run_setup(tmp_path, config):
     async def run():
         bot = YomiBot(config, StubEngine(), DictionaryStore(tmp_path / "dict"), SettingsStore(tmp_path / "settings"))
         bot.tree.sync = AsyncMock(return_value=[object()] * 9)
@@ -56,6 +52,40 @@ def setup_result(tmp_path_factory):
         return result
 
     return asyncio.run(run())
+
+
+@pytest.fixture(scope="module")
+def setup_result(tmp_path_factory):
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="突然の死")
+    return run_setup(tmp_path_factory.mktemp("bot"), config)
+
+
+def test_sudden_death_can_be_disabled(tmp_path):
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="", enable_sudden_death=False)
+    result = run_setup(tmp_path, config)
+    assert set(result["prefix"]) == (TOP_LEVEL - {"sd"}) | SUBCOMMANDS
+    assert set(result["app"]) == TOP_LEVEL - {"sd"}
+    assert "credit" in result["app"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_help_mentions_sd_only_when_enabled(tmp_path, enabled):
+    from yomi_kai.cogs.voice import VoiceCog
+
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", enable_sudden_death=enabled)
+    cog = VoiceCog(
+        SimpleNamespace(user=None),
+        config,
+        StubEngine(),
+        DictionaryStore(tmp_path / "dict"),
+        SettingsStore(tmp_path / "settings"),
+        lambda wav: wav,
+    )
+    ctx = FakeCtx(None)
+    asyncio.run(VoiceCog.help_command.callback(cog, ctx))
+    names = [field.name for field in ctx.sent[0][1]["embed"].fields]
+    assert ("y.sd" in names) is enabled
+    assert "y.credit" in names
 
 
 def test_prefix_commands_are_hybrid(setup_result):
