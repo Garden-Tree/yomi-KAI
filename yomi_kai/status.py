@@ -5,6 +5,10 @@ from __future__ import annotations
 import math
 import os
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .session import LatencySummary
 
 UNKNOWN = "不明"
 VERSION_ENV = "YOMI_KAI_VERSION"
@@ -32,6 +36,16 @@ def format_latency(latency: float) -> str:
     return f"{latency * 1000:.0f}ms" if math.isfinite(latency) else UNKNOWN
 
 
+def format_speech_latency(summary: LatencySummary | None) -> str:
+    """受信から読み上げの開始までの時間（中央値・95パーセンタイル・件数）。記録が無ければ「記録なし」。"""
+    if summary is None:
+        return "記録なし"
+    return (
+        f"中央値 {summary.median * 1000:.0f}ms・95%が {summary.p95 * 1000:.0f}ms 以内"
+        f"（直近 {summary.count}件、サーバーごとに最大100件）"
+    )
+
+
 def format_synthesis(
     workers: int, healthy: bool, last_error: float | None, errors: int, *, google: bool = False
 ) -> str:
@@ -56,13 +70,18 @@ def status_fields(
     uptime: float | None,
     version: str,
     google: bool = False,
+    speech_latency: LatencySummary | None = None,
 ) -> list[tuple[str, str]]:
-    """(項目名, 値) の一覧。``queue`` が None ならサーバー外（DM）。``google`` は Google TTS を使っているか。"""
+    """(項目名, 値) の一覧。``queue`` が None ならサーバー外（DM）。``google`` は Google TTS を使っているか。
+
+    ``speech_latency`` はメッセージの受信から読み上げの開始までの時間の集計（全サーバー）。
+    """
     return [
         ("Discord の応答時間", format_latency(latency)),
         ("接続中のボイスチャンネル", f"{sessions}件（この Bot 全体）"),
         ("このサーバーの読み上げ待ち", "-" if queue is None else f"{queue}件"),
         ("音声合成", format_synthesis(workers, healthy, last_error, errors, google=google)),
+        ("読み上げの開始までの時間", format_speech_latency(speech_latency)),
         ("稼働時間", UNKNOWN if uptime is None else format_duration(uptime)),
         ("バージョン", version),
     ]
