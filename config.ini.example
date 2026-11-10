@@ -7,7 +7,7 @@ PREFIX = y.
 AFK_TIME = 1800
 ;sec
 SD_MSG = 突然の死
-;y.sd を引数なしで実行したときに読み上げるメッセージ
+;y.sd を引数なしで実行したときに読み上げるメッセージ（ENABLE_SUDDEN_DEATH = False なら省略可）
 ;以下は任意項目
 MAX_READ_LENGTH = 100
 ;読み上げる最大文字数。超えた分は「以下略」になります。0 で無制限
@@ -23,4 +23,6 @@ MAX_READ_LENGTH = 100
 ;切断がこの秒数（30以上）続いたら通知します。既定は 300（5分）
 ;LOG_READ_TEXT = False
 ;True にすると、読み上げた本文をログファイル（log/）に記録します。既定 False（本文はログに残しません）
+;ENABLE_SUDDEN_DEATH = True
+;False にすると「突然の死」コマンド（y.sd・/sd）を登録せず、ヘルプにも表示しません（既定 True）
 ;多くのサーバーに公開する場合の設定（辞書の上限・使える話者の制限・ブラックリスト・使用量の記録）は docs/hosting.md を参照してください

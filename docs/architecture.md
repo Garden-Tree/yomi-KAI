@@ -42,7 +42,7 @@ yomi_kai/
     voice.py           # help / c / dc / s / status コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・自動接続・入退室の読み上げ）
     settings.py        # voice / speed（ユーザーごとの話者・速度）、announce / readname / speedup / readbots（サーバー全体のオン/オフ）
     dictionary.py      # dict add / del / list / export / import / help
-    misc.py            # sd（突然の死）、credit（音声のクレジット表記）
+    misc.py            # sd（突然の死、ENABLE_SUDDEN_DEATH = False なら Cog ごと追加しない）、credit（音声のクレジット表記）
     admin.py           # サーバー管理者向け: ignore（読み上げない人・ロール）、autojoin（自動接続）
 docker-entrypoint.sh   # Docker: ボリュームの所有者を直してから一般ユーザーで起動
 tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist）

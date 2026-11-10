@@ -180,7 +180,7 @@ Discord の応答時間、接続中のボイスチャンネルの数、このサ
 
 ### y.sd
 
-「突然の死」に関する操作です。詳しくは`y.sd help`を参照してください。
+「突然の死」に関する操作です。詳しくは`y.sd help`を参照してください。config.ini で `ENABLE_SUDDEN_DEATH = False` にすると、このコマンドは使えなくなります（docs/hosting.md 参照）。
 
 ### y.credit
 

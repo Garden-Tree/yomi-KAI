@@ -180,11 +180,12 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(name=f"{prefix}status", value="Bot の動作状況を表示します。", inline=False)
-        help_embed.add_field(
-            name=f"{prefix}sd",
-            value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
-            inline=False,
-        )
+        if self.config.enable_sudden_death:
+            help_embed.add_field(
+                name=f"{prefix}sd",
+                value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
+                inline=False,
+            )
         help_embed.add_field(
             name=f"{prefix}credit",
             value="読み上げ音声のクレジット（VOICEVOX:ずんだもん など）を表示します。",

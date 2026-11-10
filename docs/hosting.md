@@ -22,6 +22,8 @@ ALERT_WEBHOOK_URL = https://discord.com/api/webhooks/xxxx/yyyy
 VOICEVOX_WORKERS = 2
 ; 月ごとの使用量を記録する
 RECORD_USAGE = True
+; 読み上げと関係ない「突然の死」コマンド（y.sd・/sd）を外す
+ENABLE_SUDDEN_DEATH = False
 ```
 
 * **`LOG_READ_TEXT`**: `False`（既定）のとき、メッセージの本文はログに一切残りません。yomi-KAI 自身のログは文字数だけを記録し、本文を含む discord.py の詳細ログ（受信したイベント・送信したリクエストの中身）も出力しません。不具合の調査で一時的に本文を見たいときだけ `True` にし、終わったら戻してください。
@@ -31,6 +33,7 @@ RECORD_USAGE = True
 * **`ALERT_WEBHOOK_URL`**: 公開版では止まっていることに気付けるよう設定を推奨します（README の「切断通知」参照）。
 * **`VOICEVOX_WORKERS`**: 同時に読み上げるサーバーが多いほど効果があります。メモリの目安は 1 で約 280MB、2 で約 530MB、4 で約 890MB です（README の「音声合成の同時実行数」参照）。まず 2 で始め、`docker stats` のメモリ使用量と、混雑時の読み上げの遅れを見て調整してください。CPU のコア数より大きくしても速くはなりません。
 * **`RECORD_USAGE`**（既定 False）: `True` にすると、月ごとの使用量を記録します（下記「3. 使用量の確認」参照）。
+* **`ENABLE_SUDDEN_DEATH`**（既定 True）: `False` にすると「突然の死」コマンド（`y.sd`・`/sd`）を登録せず、`y.help` にも表示しません。読み上げと関係ない機能を省いて、コマンドの一覧を読み上げ用のものだけにしたい公開版向けです。`False` のときは `SD_MSG` を省略できます。`y.credit` はこの設定にかかわらず使えます。スラッシュコマンドの一覧から `/sd` が消えるまでには、再起動後しばらくかかることがあります。
 
 ### サーバーごとの設定
 
