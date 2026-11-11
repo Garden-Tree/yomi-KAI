@@ -49,7 +49,7 @@ ENABLE_SUDDEN_DEATH = False
 
 ### プラン（フリー / プレミアム）と上限
 
-上の `MAX_READ_LENGTH` / `MAX_DICT_ENTRIES` / `MAX_USER_DICT_ENTRIES` / `SPEAKER_ALLOWLIST` は、すべてのサーバーに適用される「フリー」の上限です。`PREMIUM_ENABLED = True` にすると、運営者が指定したサーバーだけ「プレミアム」の上限（`PREMIUM_*`）を使います。決済の仕組みは含まれていないので、プレミアムにするサーバーは運営者が手で登録します。
+上の `MAX_READ_LENGTH` / `MAX_DICT_ENTRIES` / `MAX_USER_DICT_ENTRIES` / `SPEAKER_ALLOWLIST` は、すべてのサーバーに適用される「フリー」の上限です。`PREMIUM_ENABLED = True` にすると、運営者が指定したサーバーだけ「プレミアム」の上限（`PREMIUM_*`）を使います。プレミアムにするサーバーは運営者が手で登録するか、サイトで受け付けた Stripe の契約を同期します（下記「Stripe の契約の同期」）。
 
 ```ini
 PREMIUM_ENABLED = True
@@ -79,6 +79,36 @@ PREMIUM_SPEAKER_ALLOWLIST =
 * プレミアムから外れたサーバーで、プレミアムだけの話者を選んでいた人は、サーバーの話者 → 既定の話者の順に代わりの話者で読み上げます。辞書の登録は消えません（上限を超えた分は、上限を下回るまで新しく登録できないだけです）。
 * `y.plan` で、各サーバーの利用者が自分のサーバーのプランと上限を確認できます。`PREMIUM_ENABLED = False`（既定）のときは、プレミアムについては何も表示しません。
 * 将来の有料プランでは、話者の追加・複数のボイスチャンネル・優先的な合成なども想定しています（このバージョンでは上記の上限のみ）。
+
+### Stripe の契約の同期（公開版の運営者向け・準備中）
+
+公開版では、プレミアムの申し込みと支払いを Stripe で受け付けます。Bot はインターネットから届かない自宅のサーバーで動いているので、Stripe とのやりとり（Checkout・Webhook・Billing Portal）はすべてサイト（yomi-kai-site の Cloudflare Pages Functions と D1）が行い、Bot はサイトから契約中のサーバーの一覧を取りに行くだけです。Stripe のキーは Bot には置きません。
+
+```
+y.plan（管理者にだけ署名付きリンク）→ サイトの /premium/?t=<トークン> → Stripe Checkout（申し込み）/ Billing Portal（契約の管理）
+Stripe ──Webhook──▶ サイト（POST /api/stripe-webhook）──▶ D1（subscriptions）
+Bot ──5分ごとに GET /api/premium-guilds（Bearer トークン）──▶ サイト ──▶ settings/premium.json に反映
+```
+
+サイト側の設定（Stripe のアカウント・商品と価格・Webhook・Cloudflare のシークレット）は yomi-kai-site の README の「プレミアム（Stripe）」を参照してください。Bot の `config.ini` には次を足します。
+
+```ini
+PREMIUM_ENABLED = True
+; サイトから Stripe の契約を同期する（5分ごと）
+PREMIUM_SYNC_URL = https://yomi-kai.gadelog.com/api/premium-guilds
+PREMIUM_SYNC_TOKEN = （Cloudflare のシークレット PREMIUM_SYNC_TOKEN と同じ値）
+; y.plan に申し込み・契約の管理のリンクを出す
+PREMIUM_SITE_URL = https://yomi-kai.gadelog.com
+PREMIUM_LINK_SECRET = （Cloudflare のシークレット PREMIUM_LINK_SECRET と同じ値）
+```
+
+* トークン・シークレットは、それぞれ別の32文字以上のランダムな文字列にします（例: `python -c "import secrets; print(secrets.token_urlsafe(32))"`）。短いと起動時にエラーになります。値はログに出しません。
+* **同期**（`PREMIUM_SYNC_URL` / `PREMIUM_SYNC_TOKEN`、`PREMIUM_ENABLED = True` のときだけ）: 起動時と5分ごとに契約中のサーバーと期限を取得し、`settings/premium.json` に `{"expires": "YYYY-MM-DD", "source": "stripe", "status": "active"}` の形で書きます。期限は契約の期間の終わり（日本時間の日付。支払いが滞っている間は +3日の猶予）です。
+  * 書き換えるのは `"source": "stripe"` の項目だけです。手で書いた項目（`source` が無い）はそのまま残り、同じサーバーが両方にあれば手で書いた項目を優先します。解約されたサーバーは次の同期で一覧から消えます。
+  * 取得に失敗した・応答の形が正しくない・`premium.json` が壊れている場合は、ファイルを書き換えません（警告は30分に1回まで）。同期が止まっても、各項目の期限を過ぎればフリーに戻ります。
+  * 書き換えは一時ファイルに書いてから差し替えるので、途中で壊れることはありません。手で編集するときは、同期と重ならないよう保存は素早く済ませてください（同期は内容が変わったときだけ書き込みます）。
+* **リンク**（`PREMIUM_SITE_URL` / `PREMIUM_LINK_SECRET`、`PREMIUM_ENABLED = True` のときだけ）: `y.plan` を使った人が「サーバー管理」の権限を持っていれば、「プレミアムに申し込む / 契約を管理」のリンクを渡します。`/plan` では本人にだけ見えるメッセージ、`y.plan` では DM で送ります（チャンネルには出しません）。リンクはそのサーバー専用の署名付き（サーバー ID と期限を `PREMIUM_LINK_SECRET` で HMAC-SHA256 署名）で、1時間で切れます。サーバー ID を書き換えたリンクや、期限切れのリンクはサイトが受け付けません。
+* 契約はサーバー単位です（申し込んだ人ではなく、サーバーがプレミアムになります）。
 
 ### サーバーごとの設定
 
@@ -147,7 +177,7 @@ docker compose exec yomi-kai python -m yomi_kai.usage
 | 辞書 | `dict/{サーバーID}.json` | サーバーで登録された単語と読み |
 | 個人辞書 | `dict/users/{サーバーID}.json` | ユーザー ID ごとの、個人辞書の単語と読み |
 | 接続中のボイスチャンネル | `settings/voice_sessions.json` | 再起動後に再接続するための、サーバー ID・ボイスチャンネル ID・テキストチャンネル ID（切断すると消える） |
-| プレミアムのサーバー（`PREMIUM_ENABLED = True` の場合のみ） | `settings/premium.json` | 運営者が登録したサーバー ID と期限 |
+| プレミアムのサーバー（`PREMIUM_ENABLED = True` の場合のみ） | `settings/premium.json` | 運営者が登録した、または Stripe の契約から同期したサーバー ID と期限（同期した項目は契約の状態も） |
 | 使用量（`RECORD_USAGE = True` の場合のみ） | `usage/{YYYY-MM}.json` | サーバー ID・ユーザー ID ごとの、月ごとの読み上げ文字数とメッセージ数 |
 | ブラックリスト | `settings/blocked_guilds.txt` | 運営者が登録したサーバー ID |
 | ログ | `log/` | 起動・接続・コマンドの実行などの動作記録（サーバー ID、ユーザー名、チャンネル名、辞書に登録・削除した単語などを含む）。最新50ファイルを保持 |

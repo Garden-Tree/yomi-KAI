@@ -21,6 +21,7 @@ from .dictionary import DictionaryStore, UserDictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
 from .plans import CHECK_INTERVAL as PREMIUM_CHECK_INTERVAL
 from .plans import PlanManager
+from .premium_sync import PremiumSyncer, http_fetcher
 from .rejoin import VoiceSessionRegistry
 from .settings import SettingsStore
 from .status import bot_version
@@ -125,6 +126,18 @@ class YomiBot(commands.Bot):
         # サーバーごとの上限と使える話者（engine はフリーで使える話者に絞ったエンジン）
         self.plans = plans if plans is not None else PlanManager(config, engine)
         self._premium_task: asyncio.Task[None] | None = None
+        # Stripe の契約の同期（PREMIUM_ENABLED で PREMIUM_SYNC_URL / PREMIUM_SYNC_TOKEN があるときだけ）
+        self.premium_syncer: PremiumSyncer | None = None
+        self._premium_sync_task: asyncio.Task[None] | None = None
+        if self.plans.enabled and config.premium_sync_url and config.premium_sync_token:
+            self.premium_syncer = PremiumSyncer(
+                http_fetcher(config.premium_sync_url, config.premium_sync_token),
+                config.premium_guilds_file,
+                on_change=self.plans.reload,
+            )
+            logger.info("Stripe の契約の同期を有効にしました (%s)", mask_url(config.premium_sync_url))
+        elif config.premium_sync_url:
+            logger.warning("PREMIUM_ENABLED = False のため、PREMIUM_SYNC_URL は使いません")
         # 起動した時刻（y.status の稼働時間）
         self.started_at = time.time()
         # 使用量の計測（RECORD_USAGE = True のときだけ。本文は保存しない）
@@ -203,6 +216,8 @@ class YomiBot(commands.Bot):
             self._blocklist_task.cancel()
         if self._premium_task is not None:
             self._premium_task.cancel()
+        if self._premium_sync_task is not None:
+            self._premium_sync_task.cancel()
         if self.alerter is not None:
             await self.alerter.close()
         # Cog の取り外し（読み上げの停止）まで済んでから、残りの使用量を書き込む
@@ -294,6 +309,8 @@ class YomiBot(commands.Bot):
         if self.plans.enabled:
             await asyncio.to_thread(self.plans.reload)
             self._premium_task = asyncio.create_task(self._watch_premium(), name="yomi-kai-premium")
+        if self.premium_syncer is not None:
+            self._premium_sync_task = asyncio.create_task(self.premium_syncer.run(), name="yomi-kai-premium-sync")
 
         from .cogs.admin import AdminCog
         from .cogs.dictionary import DictionaryCog

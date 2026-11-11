@@ -13,6 +13,8 @@ MAX_USER_DICT_ENTRIES（個人辞書の登録数の上限、既定 0 = 無制限
 PREMIUM_ENABLED（プレミアムプランを使うか、既定 False）、PREMIUM_GUILDS_FILE（プレミアムのサーバーの一覧、
 既定 settings/premium.json）、PREMIUM_MAX_READ_LENGTH / PREMIUM_MAX_DICT_ENTRIES / PREMIUM_MAX_USER_DICT_ENTRIES
 （プレミアムの上限、空・0 で無制限）、PREMIUM_SPEAKER_ALLOWLIST（プレミアムで使える話者、空なら読み込んだ全話者）、
+PREMIUM_SYNC_URL / PREMIUM_SYNC_TOKEN（サイトから Stripe の契約を同期する、既定は同期しない）、
+PREMIUM_SITE_URL / PREMIUM_LINK_SECRET（y.plan に出す申し込み・契約の管理のリンク、既定は出さない）、
 BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）、
 ENABLE_SUDDEN_DEATH（「突然の死」コマンド sd を使えるようにするか、既定 True。False なら SD_MSG は省略可）
 を追加している。
@@ -24,6 +26,9 @@ import configparser
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+# PREMIUM_SYNC_TOKEN・PREMIUM_LINK_SECRET の最低の長さ（サイト側も同じ値で確かめる）
+from .premium_link import MIN_SECRET_LENGTH
 
 SECTION = "DEFAULT"
 
@@ -69,6 +74,12 @@ class Config:
     premium_max_dict_entries: int = 0
     premium_max_user_dict_entries: int = 0
     premium_speaker_allowlist: tuple[str, ...] = ()
+    # Stripe の契約の同期（URL とトークンの両方があり、PREMIUM_ENABLED のときだけ有効。yomi_kai.premium_sync）
+    premium_sync_url: str | None = None
+    premium_sync_token: str | None = None
+    # y.plan に出す申し込み・契約の管理のリンク（両方があるときだけ。yomi_kai.premium_link）
+    premium_site_url: str | None = None
+    premium_link_secret: str | None = None
     # 利用を断るサーバーの ID を1行に1つ書いたファイル（無ければ何もブロックしない）
     blocked_guilds_file: str = "settings/blocked_guilds.txt"
     # False なら「突然の死」コマンド（y.sd・/sd）を登録しない
@@ -84,6 +95,8 @@ class Config:
             f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
             f"max_user_dict_entries={self.max_user_dict_entries}, premium_enabled={self.premium_enabled}, "
+            f"premium_sync={'on' if self.premium_sync_url else 'off'}, "
+            f"premium_link={'on' if self.premium_link_secret else 'off'}, "
             f"blocked_guilds_file={self.blocked_guilds_file!r}, enable_sudden_death={self.enable_sudden_death})"
         )
 
@@ -142,6 +155,26 @@ def _int(
     return value
 
 
+def _url_and_secret(
+    section: configparser.SectionProxy, url_key: str, secret_key: str
+) -> tuple[str | None, str | None]:
+    """https:// の URL と秘密の値の組を読む。両方とも空なら (None, None)。片方だけ・短すぎる値は ConfigError。
+
+    値そのものは秘密情報なので、エラーメッセージには出さない。
+    """
+    url = (section.get(url_key) or "").strip() or None
+    secret = (section.get(secret_key) or "").strip() or None
+    if url is not None and not url.startswith("https://"):
+        raise ConfigError(f"config.ini の `{url_key}` は https:// で始まる URL を指定してください。")
+    if (url is None) != (secret is None):
+        raise ConfigError(f"config.ini の `{url_key}` と `{secret_key}` は両方とも指定してください。")
+    if secret is not None and len(secret) < MIN_SECRET_LENGTH:
+        raise ConfigError(
+            f"config.ini の `{secret_key}` は {MIN_SECRET_LENGTH} 文字以上のランダムな文字列にしてください。"
+        )
+    return url, secret
+
+
 def load_config(path: str | Path = "config.ini") -> Config:
     """config.ini を読み込んで :class:`Config` を返す。不備があれば :class:`ConfigError` を送出する。"""
     path = Path(path)
@@ -198,6 +231,8 @@ def load_config(path: str | Path = "config.ini") -> Config:
         premium_speaker_allowlist = tuple(
             dict.fromkeys(split_names(section.get("PREMIUM_SPEAKER_ALLOWLIST") or ""))
         )
+        premium_sync_url, premium_sync_token = _url_and_secret(section, "PREMIUM_SYNC_URL", "PREMIUM_SYNC_TOKEN")
+        premium_site_url, premium_link_secret = _url_and_secret(section, "PREMIUM_SITE_URL", "PREMIUM_LINK_SECRET")
         blocked_guilds_file = (section.get("BLOCKED_GUILDS_FILE") or "").strip() or "settings/blocked_guilds.txt"
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
@@ -230,6 +265,10 @@ def load_config(path: str | Path = "config.ini") -> Config:
         premium_max_dict_entries=premium_max_dict_entries,
         premium_max_user_dict_entries=premium_max_user_dict_entries,
         premium_speaker_allowlist=premium_speaker_allowlist,
+        premium_sync_url=premium_sync_url,
+        premium_sync_token=premium_sync_token,
+        premium_site_url=premium_site_url,
+        premium_link_secret=premium_link_secret,
         blocked_guilds_file=blocked_guilds_file,
         enable_sudden_death=enable_sudden_death,
     )

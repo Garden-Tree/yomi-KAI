@@ -35,4 +35,10 @@ MAX_READ_LENGTH = 100
 ;個人辞書（y.mydict）の1人あたりの登録数の上限。0 で無制限（既定）
 ;PREMIUM_ENABLED = False
 ;True にすると settings/premium.json に書いたサーバーで PREMIUM_* の上限を使います（既定 False。docs/hosting.md 参照）
+;PREMIUM_SYNC_URL =
+;PREMIUM_SYNC_TOKEN =
+;サイトで受け付けた Stripe の契約を5分ごとに取得し、settings/premium.json に反映します（PREMIUM_ENABLED = True のときだけ。両方とも指定。docs/hosting.md の「Stripe の契約の同期」参照）
+;PREMIUM_SITE_URL =
+;PREMIUM_LINK_SECRET =
+;y.plan で「サーバー管理」の権限を持つ人に、申し込み・契約の管理のリンクを本人にだけ見える形で渡します（両方とも指定。トークン・シークレットは32文字以上）
 ;多くのサーバーに公開する場合の設定（辞書の上限・使える話者の制限・プレミアムプラン・ブラックリスト・使用量の記録）は docs/hosting.md を参照してください

@@ -32,6 +32,8 @@ yomi_kai/
   dictionary.py        # DictionaryStore: dict/{guild_id}.json、UserDictionaryStore: 個人辞書 dict/users/{guild_id}.json
   settings.py          # SettingsStore: settings/{guild_id}.json（話者・速度・高さ・各種オン/オフ）と resolve_voice / resolve_pitch
   plans.py             # PlanManager: サーバーごとの上限（limits_for）と使える話者、PremiumGuilds: settings/premium.json
+  premium_sync.py      # PremiumSyncer: サイトの GET /api/premium-guilds から Stripe の契約を取得し premium.json に反映（discord を import しない）
+  premium_link.py      # y.plan で管理者に渡す申し込み・契約の管理のリンク（HMAC-SHA256 の署名付きトークン）
   rejoin.py            # VoiceSessionRegistry: 再起動後の自動再接続のための接続の記録（settings/voice_sessions.json）
   session.py           # GuildSession: サーバーごとの接続・キュー・ワーカー・AFKタイマー
   ui.py                # 話者選択ドロップダウン（discord.ui.Select / View）
@@ -49,7 +51,7 @@ yomi_kai/
     misc.py            # sd（突然の死、ENABLE_SUDDEN_DEATH = False なら Cog ごと追加しない）、credit（音声のクレジット表記）
     admin.py           # サーバー管理者向け: ignore（読み上げない人・ロール）、autojoin（自動接続）
 docker-entrypoint.sh   # Docker: ボリュームの所有者を直してから一般ユーザーで起動
-tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist / plans / pitch / read_toggles / user_dictionary / rejoin）
+tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist / plans / premium_sync / pitch / read_toggles / user_dictionary / rejoin）
 docs/hosting.md        # 公開版（ホスティング）向けの推奨設定・ブラックリスト・使用量・保存するデータ
 ```
 
@@ -160,8 +162,9 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 ### 3.3 プランと上限（`plans.py`）
 * `PlanManager.limits_for(guild_id)` が `Limits`（`plan`・`max_read_length`・`max_dict_entries`・`max_user_dict_entries`・`expires`、数値の 0 は無制限）を返し、`speakers_for(guild_id)` / `engine_for(guild_id)` がそのサーバーで使える話者に絞ったエンジンを返します。読み上げの文字数（`VoiceCog.on_message`）、サーバー辞書・個人辞書の登録数（`DictionaryCog`）、話者の一覧・決定（`VoiceCog` / `SettingsCog` / `MiscCog`）はすべてここを通します。合成は読み込んだ全話者のエンジン（`base_engine`）で行い、使える話者かどうかは `resolve_voice` が確かめます。
 * フリーの値は従来のキー（`MAX_READ_LENGTH` / `MAX_DICT_ENTRIES` / `MAX_USER_DICT_ENTRIES` / `SPEAKER_ALLOWLIST`）、プレミアムの値は `PREMIUM_MAX_READ_LENGTH` / `PREMIUM_MAX_DICT_ENTRIES` / `PREMIUM_MAX_USER_DICT_ENTRIES` / `PREMIUM_SPEAKER_ALLOWLIST`（空・0 で無制限、話者は空なら全話者）です。
-* `PREMIUM_ENABLED = False`（既定）のときは `PremiumGuilds` を作らず、すべてのサーバーがフリーです（既定の設定ではすべて無制限）。True のときは `settings/premium.json`（`PREMIUM_GUILDS_FILE`、`{"<guild_id>": null | "YYYY-MM-DD" | {"expires": ...}}`）を `setup_hook` で一度読み、以後 `YomiBot._watch_premium` が30秒ごとに `asyncio.to_thread` で更新時刻を確かめて読み直します。期限はその日まで有効で、`limits_for` を呼ぶたびに今日の日付と比べます。壊れたファイルは前回の内容のまま使い（同じファイルでは警告を一度だけ）、読めない項目は警告して飛ばします。`limits_for` は I/O をしません。決済の処理はありません。
-* `y.plan`（`cogs/plan.py`）は、プラン（`PREMIUM_ENABLED` のときだけ）・読み上げる文字数・サーバー辞書と自分の個人辞書の件数 / 上限・話者の数を表示し、フリーのサーバーにはプレミアムの上限を1行で案内します。
+* `PREMIUM_ENABLED = False`（既定）のときは `PremiumGuilds` を作らず、すべてのサーバーがフリーです（既定の設定ではすべて無制限）。True のときは `settings/premium.json`（`PREMIUM_GUILDS_FILE`、`{"<guild_id>": null | "YYYY-MM-DD" | {"expires": ...}}`）を `setup_hook` で一度読み、以後 `YomiBot._watch_premium` が30秒ごとに `asyncio.to_thread` で更新時刻を確かめて読み直します。期限はその日まで有効で、`limits_for` を呼ぶたびに今日の日付と比べます。壊れたファイルは前回の内容のまま使い（同じファイルでは警告を一度だけ）、読めない項目は警告して飛ばします。`limits_for` は I/O をしません。決済の処理は Bot には無く、サイト（yomi-kai-site の Pages Functions）が Stripe と D1 で行います。
+* Stripe の契約の同期（`premium_sync.py`）: `PREMIUM_ENABLED` で `PREMIUM_SYNC_URL` / `PREMIUM_SYNC_TOKEN` があれば、`YomiBot.premium_syncer`（`PremiumSyncer`）が起動時と5分ごとにサイトから `{"guilds": [{"guild_id", "expires", "status"}]}` を取得し、`premium.json` の `"source": "stripe"` の項目だけを置き換えて `write_json_atomic` で書きます（手で書いた項目を優先。内容が同じなら書かない）。書き換えたら `PlanManager.reload` を呼びます。取得の失敗・形の正しくない応答・壊れた `premium.json` ではファイルを書き換えません。
+* `y.plan`（`cogs/plan.py`）は、プラン（`PREMIUM_ENABLED` のときだけ）・読み上げる文字数・サーバー辞書と自分の個人辞書の件数 / 上限・話者の数を表示し、フリーのサーバーにはプレミアムの上限を1行で案内します。`PREMIUM_SITE_URL` / `PREMIUM_LINK_SECRET` があれば、「サーバー管理」の権限を持つ人にだけ `<サイト>/premium/?t=v1.<guild_id>.<期限>.<HMAC-SHA256>`（`premium_link.py`、1時間有効）を、スラッシュでは ephemeral、プレフィックスでは DM で渡します。
 
 ### 3.4 個人辞書（`UserDictionaryStore`）
 * `dict/users/{guild_id}.json` に `{"<user_id>": {"単語": "読み"}}` で保存します（Docker では `dict/` のボリュームに含まれる）。サーバーごとに1ファイルを読み、ユーザーごとのコンパイル済み辞書をキャッシュします。登録の規則（`validate_entry`）・壊れたファイルの扱い（`FailedLoads`、書き込み時は上書きしない）・アトミックな書き込みは `DictionaryStore` と同じで、上限はユーザーごとに数えます。
