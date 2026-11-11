@@ -17,6 +17,7 @@ from discord.ext import commands
 
 from ..config import Config
 from ..dictionary import DictionaryStore, InvalidEntryError, validate_entry
+from ..plans import PlanManager
 from .common import (
     EMBED_COLOR,
     guild_only_check,
@@ -67,10 +68,14 @@ def parse_dictionary_import(data: bytes) -> dict[str, str]:
 
 
 class DictionaryCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, store: DictionaryStore) -> None:
+    def __init__(
+        self, bot: commands.Bot, config: Config, store: DictionaryStore, *, plans: PlanManager | None = None
+    ) -> None:
         self.bot = bot
         self.config = config
         self.store = store
+        # 辞書の登録数の上限はプランで決まる（省略時は config の MAX_DICT_ENTRIES）
+        self.plans = plans
 
     async def cog_check(self, ctx: commands.Context) -> bool:
         return guild_only_check(ctx)
@@ -85,6 +90,11 @@ class DictionaryCog(commands.Cog):
             failed_notice=DICT_FAILED_NOTICE,
         )
 
+    def _dict_limit(self, guild_id: int) -> int:
+        if self.plans is None:
+            return self.config.max_dict_entries
+        return self.plans.limits_for(guild_id).max_dict_entries
+
     @commands.hybrid_group(name="dict", invoke_without_command=True, description="サーバーの読み上げ辞書を操作します")
     @app_commands.guild_only()
     async def dict_group(self, ctx: commands.Context, *args: str) -> None:
@@ -94,7 +104,7 @@ class DictionaryCog(commands.Cog):
     @dict_group.command(name="add", description="単語の読み方を辞書に登録します", ignore_extra=False)
     @app_commands.describe(word="単語（50文字まで）", reading="読み方（100文字まで）")
     async def dict_add(self, ctx: commands.Context, word: str, reading: str) -> None:
-        limit = self.config.max_dict_entries
+        limit = self._dict_limit(ctx.guild.id)
         try:
             added = await asyncio.to_thread(self.store.add, ctx.guild.id, word, reading, max_entries=limit)
         except InvalidEntryError as e:
@@ -153,7 +163,7 @@ class DictionaryCog(commands.Cog):
         except ValueError as e:
             await reply(ctx, f"辞書を読み込めませんでした: {e}", private=True)
             return
-        limit = self.config.max_dict_entries
+        limit = self._dict_limit(ctx.guild.id)
         added, updated, skipped = await asyncio.to_thread(self.store.merge, ctx.guild.id, entries, max_entries=limit)
         message = f"辞書を読み込みました（追加 {added}件、更新 {updated}件）"
         if skipped:

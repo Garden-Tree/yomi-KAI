@@ -8,6 +8,10 @@ VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
 LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、RECORD_USAGE（使用量を記録するか、既定 False）、
 USAGE_DIR（使用量の保存先、既定 usage）、
 MAX_DICT_ENTRIES（辞書の登録数の上限、既定 0 = 無制限）、SPEAKER_ALLOWLIST（使える話者、既定は全話者）、
+MAX_USER_DICT_ENTRIES（個人辞書の登録数の上限、既定 0 = 無制限）、
+PREMIUM_ENABLED（プレミアムプランを使うか、既定 False）、PREMIUM_GUILDS_FILE（プレミアムのサーバーの一覧、
+既定 settings/premium.json）、PREMIUM_MAX_READ_LENGTH / PREMIUM_MAX_DICT_ENTRIES / PREMIUM_MAX_USER_DICT_ENTRIES
+（プレミアムの上限、空・0 で無制限）、PREMIUM_SPEAKER_ALLOWLIST（プレミアムで使える話者、空なら読み込んだ全話者）、
 BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）、
 ENABLE_SUDDEN_DEATH（「突然の死」コマンド sd を使えるようにするか、既定 True。False なら SD_MSG は省略可）
 を追加している。
@@ -50,6 +54,16 @@ class Config:
     max_dict_entries: int = 0
     # 使える話者の名前（空なら全話者）
     speaker_allowlist: tuple[str, ...] = ()
+    # 個人辞書（1人あたり）の登録数の上限（0 で無制限）
+    max_user_dict_entries: int = 0
+    # プレミアムプラン（False ならすべてのサーバーが上の上限を使う）
+    premium_enabled: bool = False
+    premium_guilds_file: str = "settings/premium.json"
+    # プレミアムのサーバーの上限（0 で無制限、話者は空なら読み込んだ全話者）
+    premium_max_read_length: int = 0
+    premium_max_dict_entries: int = 0
+    premium_max_user_dict_entries: int = 0
+    premium_speaker_allowlist: tuple[str, ...] = ()
     # 利用を断るサーバーの ID を1行に1つ書いたファイル（無ければ何もブロックしない）
     blocked_guilds_file: str = "settings/blocked_guilds.txt"
     # False なら「突然の死」コマンド（y.sd・/sd）を登録しない
@@ -63,6 +77,7 @@ class Config:
             f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
             f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
+            f"max_user_dict_entries={self.max_user_dict_entries}, premium_enabled={self.premium_enabled}, "
             f"blocked_guilds_file={self.blocked_guilds_file!r}, enable_sudden_death={self.enable_sudden_death})"
         )
 
@@ -159,6 +174,17 @@ def load_config(path: str | Path = "config.ini") -> Config:
         usage_dir = (section.get("USAGE_DIR") or "").strip() or "usage"
         max_dict_entries = _int(section, "MAX_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
         speaker_allowlist = tuple(dict.fromkeys(split_names(section.get("SPEAKER_ALLOWLIST") or "")))
+        max_user_dict_entries = _int(section, "MAX_USER_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
+        premium_enabled = _boolean(section, "PREMIUM_ENABLED", False)
+        premium_guilds_file = (section.get("PREMIUM_GUILDS_FILE") or "").strip() or "settings/premium.json"
+        premium_max_read_length = _int(section, "PREMIUM_MAX_READ_LENGTH", 0, 0, None, "整数（0 で無制限）")
+        premium_max_dict_entries = _int(section, "PREMIUM_MAX_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
+        premium_max_user_dict_entries = _int(
+            section, "PREMIUM_MAX_USER_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）"
+        )
+        premium_speaker_allowlist = tuple(
+            dict.fromkeys(split_names(section.get("PREMIUM_SPEAKER_ALLOWLIST") or ""))
+        )
         blocked_guilds_file = (section.get("BLOCKED_GUILDS_FILE") or "").strip() or "settings/blocked_guilds.txt"
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
@@ -181,6 +207,13 @@ def load_config(path: str | Path = "config.ini") -> Config:
         usage_dir=usage_dir,
         max_dict_entries=max_dict_entries,
         speaker_allowlist=speaker_allowlist,
+        max_user_dict_entries=max_user_dict_entries,
+        premium_enabled=premium_enabled,
+        premium_guilds_file=premium_guilds_file,
+        premium_max_read_length=premium_max_read_length,
+        premium_max_dict_entries=premium_max_dict_entries,
+        premium_max_user_dict_entries=premium_max_user_dict_entries,
+        premium_speaker_allowlist=premium_speaker_allowlist,
         blocked_guilds_file=blocked_guilds_file,
         enable_sudden_death=enable_sudden_death,
     )

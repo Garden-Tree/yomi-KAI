@@ -17,7 +17,7 @@ from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
 GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
-GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots"}
+GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots", "plan"}
 TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit", "status"}
 # 「サーバー管理」の権限が必要なコマンド
 ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots", "dict import"}
@@ -133,8 +133,9 @@ def test_parameters(setup_result):
 
 
 class FakeCtx:
-    def __init__(self, interaction):
+    def __init__(self, interaction, guild=None):
         self.interaction = interaction
+        self.guild = guild
         self.sent = []
 
     async def send(self, content=None, **kwargs):

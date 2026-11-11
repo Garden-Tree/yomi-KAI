@@ -16,6 +16,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
+from ..plans import PlanManager
 from ..settings import DEFAULT_SPEED, SPEED_MAX, SPEED_MIN, SettingsStore
 from ..text import chunk_lines
 from ..tts import TTSEngine, find_speakers
@@ -46,12 +47,21 @@ def parse_speed(raw: str) -> float | None:
 
 
 class SettingsCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, engine: TTSEngine, settings: SettingsStore) -> None:
+    def __init__(
+        self,
+        bot: commands.Bot,
+        config: Config,
+        engine: TTSEngine,
+        settings: SettingsStore,
+        *,
+        plans: PlanManager | None = None,
+    ) -> None:
         self.bot = bot
         self.config = config
         self.engine = engine
         self.settings = settings
-        self.available_speakers = frozenset(s.name for s in engine.speakers())
+        # サーバーで使える話者はプランで決まる（省略時はすべてのサーバーで engine の話者）
+        self.plans = plans if plans is not None else PlanManager(config, engine)
 
     async def cog_check(self, ctx: commands.Context) -> bool:
         return guild_only_check(ctx)
@@ -97,8 +107,9 @@ class SettingsCog(commands.Cog):
 
         settings = await self.settings.aget(guild_id)
         saved = settings.user(ctx.author.id).speaker
-        current = saved if saved in self.available_speakers else "未設定（サーバー設定に従う）"
-        speakers = self.engine.speakers()
+        engine, available = self.plans.speakers_for(guild_id)
+        current = saved if saved in available else "未設定（サーバー設定に従う）"
+        speakers = engine.speakers()
         view = DropdownView(speakers, f"あなたの話者: {current}", select_user_speaker)
         message = "自分の話者を選んでください"
         if len(speakers) > MAX_OPTIONS:
@@ -110,13 +121,13 @@ class SettingsCog(commands.Cog):
         await reply(ctx, message, view=view)
 
     async def _send_speaker_list(self, ctx: commands.Context) -> None:
-        names = [s.name for s in self.engine.speakers()]
+        names = [s.name for s in self.plans.engine_for(ctx.guild.id).speakers()]
         lines = [f"使える話者（{len(names)}件）:", *names]
         for chunk in chunk_lines(lines):
             await reply(ctx, chunk, private=True)
 
     async def _set_speaker_by_name(self, ctx: commands.Context, query: str) -> None:
-        names = [s.name for s in self.engine.speakers()]
+        names = [s.name for s in self.plans.engine_for(ctx.guild.id).speakers()]
         found = find_speakers(query, names)
         if not found:
             await reply(

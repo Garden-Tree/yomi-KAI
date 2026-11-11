@@ -19,6 +19,7 @@ from discord.ext import commands
 from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore
+from ..plans import PlanManager
 from ..session import AFK_NOTICE, GuildSession, LatencyStats, SourceFactory, SynthesisStats
 from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker, should_read_author
 from ..status import bot_version, status_fields
@@ -65,6 +66,7 @@ class VoiceCog(commands.Cog):
         *,
         usage: UsageStore | None = None,
         blocklist: GuildBlocklist | None = None,
+        plans: PlanManager | None = None,
     ) -> None:
         self.bot = bot
         self.config = config
@@ -75,7 +77,8 @@ class VoiceCog(commands.Cog):
         self.usage = usage
         # 利用を断るサーバー（None ならブロックしない）
         self.blocklist = blocklist
-        self.available_speakers = frozenset(s.name for s in engine.speakers())
+        # サーバーごとの上限と使える話者（省略時はすべてのサーバーで engine の話者、config の上限）
+        self.plans = plans if plans is not None else PlanManager(config, engine)
         self.source_factory = source_factory
         # guild.id -> GuildSession（サーバーごとの状態はここにだけ持つ）
         self.sessions: dict[int, GuildSession] = {}
@@ -96,7 +99,8 @@ class VoiceCog(commands.Cog):
         if session is None:
             session = GuildSession(
                 guild_id,
-                self.engine,
+                # 合成は読み込んだ全話者のエンジンで行う（使える話者かどうかは resolve_voice で確かめる）
+                self.plans.base_engine,
                 afk_time=self.config.afk_time,
                 source_factory=self.source_factory,
                 stats=self.stats,
@@ -182,7 +186,11 @@ class VoiceCog(commands.Cog):
             ),
             inline=False,
         )
-        help_embed.add_field(name=f"{prefix}status", value="Bot の動作状況を表示します。", inline=False)
+        help_embed.add_field(
+            name=f"{prefix}status / {prefix}plan",
+            value="Bot の動作状況／このサーバーの上限（読み上げる文字数・辞書の登録数など）を表示します。",
+            inline=False,
+        )
         if self.config.enable_sudden_death:
             help_embed.add_field(
                 name=f"{prefix}sd",
@@ -236,8 +244,9 @@ class VoiceCog(commands.Cog):
 
         async def announce(embed: discord.Embed) -> None:
             settings = await self.settings.aget(guild_id)
-            current = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
-            view = DropdownView(self.engine.speakers(), f"サーバーの話者: {current}", select_server_speaker)
+            engine, available = self.plans.speakers_for(guild_id)
+            current = server_speaker(settings, available, engine.default_speaker)
+            view = DropdownView(engine.speakers(), f"サーバーの話者: {current}", select_server_speaker)
             await reply(ctx, "話者を選んでください", view=view)
             await reply(ctx, embed=embed)
 
@@ -395,13 +404,14 @@ class VoiceCog(commands.Cog):
             return
 
         dictionary = await self.store.aget(guild.id)
+        limits = self.plans.limits_for(guild.id)
         read_msg = build_read_text(
             message.content,
             dictionary,
             user_name=lambda i: m.display_name if (m := guild.get_member(i)) else None,
             role_name=lambda i: r.name if (r := guild.get_role(i)) else None,
             channel_name=lambda i: c.name if (c := guild.get_channel(i)) else None,
-            max_length=self.config.max_read_length,
+            max_length=limits.max_read_length,
             attachments=describe_attachments(
                 [(a.content_type, a.filename) for a in message.attachments],
                 [s.name for s in message.stickers],
@@ -412,9 +422,8 @@ class VoiceCog(commands.Cog):
         if not read_msg.strip():
             return
 
-        speaker, speed = resolve_voice(
-            settings, message.author.id, self.available_speakers, self.engine.default_speaker
-        )
+        engine, available = self.plans.speakers_for(guild.id)
+        speaker, speed = resolve_voice(settings, message.author.id, available, engine.default_speaker)
         now = self._clock()
         # 名前は本文の切り詰め後に付ける（MAX_READ_LENGTH は本文だけに適用）
         if settings.read_name and should_read_name(self._last_reader.get(guild.id), message.author.id, now):
@@ -555,7 +564,8 @@ class VoiceCog(commands.Cog):
         if not settings.announce_voice:
             return
         text = announce_text(kind, member.display_name)
-        speaker = server_speaker(settings, self.available_speakers, self.engine.default_speaker)
+        engine, available = self.plans.speakers_for(member.guild.id)
+        speaker = server_speaker(settings, available, engine.default_speaker)
         if session.enqueue(text, speaker, 1.0, speedup=settings.queue_speedup):
             if self.usage is not None:
                 # 入退室はユーザーの使用量ではなく、サーバーの system_chars に数える
