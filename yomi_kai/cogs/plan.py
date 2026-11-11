@@ -1,6 +1,10 @@
 """プランと上限の表示（plan）。``y.plan`` と ``/plan`` のどちらでも使える。
 
 プレミアムについては PREMIUM_ENABLED = True のときだけ表示する（既定ではこのサーバーの上限だけを表示する）。
+
+PREMIUM_ENABLED = True で PREMIUM_SITE_URL / PREMIUM_LINK_SECRET を設定していると、「サーバー管理」の権限を
+持つ人にだけ、申し込み・契約の管理のページへの署名付きリンク（yomi_kai.premium_link）を本人にだけ見える形で渡す
+（スラッシュコマンドでは ephemeral、プレフィックスのコマンドでは DM。チャンネルには出さない）。
 """
 
 from __future__ import annotations
@@ -14,9 +18,23 @@ from discord.ext import commands
 from ..config import Config
 from ..dictionary import DictionaryStore
 from ..plans import Limits, PlanManager, format_limit, format_usage
-from .common import EMBED_COLOR, guild_only_check, handle_command_error, invalid_command_notice, reply
+from ..premium_link import LINK_TTL, premium_url
+from .common import EMBED_COLOR, guild_only_check, handle_command_error, invalid_command_notice, is_slash, reply
 
 logger = logging.getLogger(__name__)
+
+PREMIUM_LINK_LABEL = "プレミアムに申し込む / 契約を管理"
+DM_SENT_NOTICE = "プレミアムの申し込み・契約の管理のリンクを DM で送りました"
+DM_FAILED_NOTICE = "DM を送れませんでした。`/plan` を使うと、リンクをあなたにだけ見える形で表示します"
+
+
+def premium_link_message(url: str, ttl: int = LINK_TTL) -> str:
+    """管理者にだけ渡すリンクの文面。"""
+    return (
+        f"**{PREMIUM_LINK_LABEL}**\n{url}\n"
+        f"このリンクはこのサーバー専用で、{ttl // 60}分間有効です。ほかの人には共有しないでください"
+        "（期限が切れたら、もう一度 plan を使ってください）。"
+    )
 
 
 def plan_name(limits: Limits) -> str:
@@ -85,3 +103,28 @@ class PlanCog(commands.Cog):
             )
         await reply(ctx, embed=embed)
         logger.info("planを表示 (guild=%s, %s)", guild_id, limits.plan)
+        await self._send_premium_link(ctx)
+
+    def premium_link_enabled(self) -> bool:
+        return bool(self.plans.enabled and self.config.premium_site_url and self.config.premium_link_secret)
+
+    async def _send_premium_link(self, ctx: commands.Context) -> None:
+        """「サーバー管理」の権限を持つ人にだけ、申し込み・契約の管理のリンクを本人にだけ見える形で渡す。"""
+        if not self.premium_link_enabled():
+            return
+        permissions = getattr(ctx.author, "guild_permissions", None)
+        if permissions is None or not permissions.manage_guild:
+            return
+        url = premium_url(self.config.premium_site_url or "", self.config.premium_link_secret or "", ctx.guild.id)
+        message = premium_link_message(url)
+        if is_slash(ctx):
+            await ctx.send(message, ephemeral=True, suppress_embeds=True)
+        else:
+            # プレフィックスのコマンドの返信はチャンネルの全員に見えるので、リンクは DM で送る
+            try:
+                await ctx.author.send(message, suppress_embeds=True)
+            except discord.HTTPException:
+                await reply(ctx, DM_FAILED_NOTICE)
+                return
+            await reply(ctx, DM_SENT_NOTICE)
+        logger.info("プレミアムのリンクを渡しました (guild=%s)", ctx.guild.id)
