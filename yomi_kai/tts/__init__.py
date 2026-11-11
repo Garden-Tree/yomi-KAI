@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import threading
 import unicodedata
 from collections.abc import Callable, Iterable, Sequence
@@ -39,7 +40,9 @@ async def run_in_synthesis_thread[R](func: Callable[..., R], *args: Any) -> R:
     return await asyncio.get_running_loop().run_in_executor(synthesis_executor(), func, *args)
 
 
-async def synthesize_async(engine: TTSEngine, text: str, speaker: str, speed: float = 1.0) -> bytes:
+async def synthesize_async(
+    engine: TTSEngine, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0
+) -> bytes:
     """``engine`` で非同期に合成する。
 
     ``synthesize_async`` を持つエンジンはそれを使う（取り消すと合成も取り消される）。持たないエンジンは
@@ -47,8 +50,19 @@ async def synthesize_async(engine: TTSEngine, text: str, speaker: str, speed: fl
     """
     method = getattr(engine, "synthesize_async", None)
     if method is not None:
-        return await method(text, speaker, speed)
-    return await run_in_synthesis_thread(engine.synthesize, text, speaker, speed)
+        return await method(text, speaker, speed, pitch)
+    return await run_in_synthesis_thread(engine.synthesize, text, speaker, speed, pitch)
+
+
+# Google TTS の pitch（半音）の範囲
+GOOGLE_PITCH_LIMIT = 20.0
+
+
+def google_semitones(pitch: float) -> float:
+    """``pitch``（VOICEVOX の pitch_scale と同じ、対数の基本周波数に足す値）を、同じ高さの変化になる
+    Google TTS の半音の数にする（±20 に収める）。"""
+    semitones = pitch * 12 / math.log(2)
+    return max(-GOOGLE_PITCH_LIMIT, min(GOOGLE_PITCH_LIMIT, semitones))
 
 
 @dataclass(frozen=True)
@@ -96,7 +110,8 @@ class TTSEngine(Protocol):
 
     ``synthesize_async`` は同じ合成のコルーチン版で、取り消し（``Task.cancel``）に応じる。
     読み上げ（``GuildSession``）はこちらを :func:`synthesize_async` 経由で使う。
-    ``speed`` は話速の倍率（1.0 が標準）。
+    ``speed`` は話速の倍率（1.0 が標準）。``pitch`` は声の高さで、VOICEVOX の ``pitch_scale``
+    （対数の基本周波数に足す値。0.0 が標準、0.15 で約2.6半音高い）と同じ単位。
     """
 
     @property
@@ -104,9 +119,9 @@ class TTSEngine(Protocol):
 
     def speakers(self) -> list[Speaker]: ...
 
-    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes: ...
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0) -> bytes: ...
 
-    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0) -> bytes: ...
+    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0) -> bytes: ...
 
 
 class CompositeEngine:
@@ -146,13 +161,13 @@ class CompositeEngine:
             engine = self._owner[speaker]
         return engine, speaker
 
-    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0) -> bytes:
         engine, speaker = self._route(speaker)
-        return engine.synthesize(text, speaker, speed)
+        return engine.synthesize(text, speaker, speed, pitch)
 
-    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
+    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0) -> bytes:
         engine, speaker = self._route(speaker)
-        return await synthesize_async(engine, text, speaker, speed)
+        return await synthesize_async(engine, text, speaker, speed, pitch)
 
 
 class FilteredEngine:
@@ -164,12 +179,14 @@ class FilteredEngine:
 
     def __init__(self, engine: TTSEngine, allowed: Iterable[str]) -> None:
         allowed = list(dict.fromkeys(allowed))
-        available = {s.name for s in engine.speakers()}
-        allowed_set = set(allowed)
+        # スタイルは「ずんだもん（あまあま）」のように y.voice list の名前で書く。
+        # 全角・半角の違い（「（」と「(」など）は y.voice と同じく無視する
+        available = {_normalize(s.name) for s in engine.speakers()}
+        allowed_set = {_normalize(name) for name in allowed}
         #: 許可リストにあるが、エンジンに存在しない名前（指定順）
-        self.unknown = [name for name in allowed if name not in available]
+        self.unknown = [name for name in allowed if _normalize(name) not in available]
         self._engine = engine
-        self._speakers = [s for s in engine.speakers() if s.name in allowed_set]
+        self._speakers = [s for s in engine.speakers() if _normalize(s.name) in allowed_set]
         if not self._speakers:
             raise ValueError("許可された話者がありません")
         names = {s.name for s in self._speakers}
@@ -189,8 +206,8 @@ class FilteredEngine:
             return self._default
         return speaker
 
-    def synthesize(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
-        return self._engine.synthesize(text, self._allowed(speaker), speed)
+    def synthesize(self, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0) -> bytes:
+        return self._engine.synthesize(text, self._allowed(speaker), speed, pitch)
 
-    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0) -> bytes:
-        return await synthesize_async(self._engine, text, self._allowed(speaker), speed)
+    async def synthesize_async(self, text: str, speaker: str, speed: float = 1.0, pitch: float = 0.0) -> bytes:
+        return await synthesize_async(self._engine, text, self._allowed(speaker), speed, pitch)

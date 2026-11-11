@@ -4,11 +4,20 @@
 DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
 ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
+STATUS_PUSH_URL / STATUS_PUSH_TOKEN / STATUS_PUSH_INTERVAL（ステータスページへの稼働状況の送信、既定は送らない）、
 VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
 LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、RECORD_USAGE（使用量を記録するか、既定 False）、
 USAGE_DIR（使用量の保存先、既定 usage）、
 MAX_DICT_ENTRIES（辞書の登録数の上限、既定 0 = 無制限）、SPEAKER_ALLOWLIST（使える話者、既定は全話者）、
-BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）を追加している。
+MAX_USER_DICT_ENTRIES（個人辞書の登録数の上限、既定 0 = 無制限）、
+PREMIUM_ENABLED（プレミアムプランを使うか、既定 False）、PREMIUM_GUILDS_FILE（プレミアムのサーバーの一覧、
+既定 settings/premium.json）、PREMIUM_MAX_READ_LENGTH / PREMIUM_MAX_DICT_ENTRIES / PREMIUM_MAX_USER_DICT_ENTRIES
+（プレミアムの上限、空・0 で無制限）、PREMIUM_SPEAKER_ALLOWLIST（プレミアムで使える話者、空なら読み込んだ全話者）、
+PREMIUM_SYNC_URL / PREMIUM_SYNC_TOKEN（サイトから Stripe の契約を同期する、既定は同期しない）、
+PREMIUM_SITE_URL / PREMIUM_LINK_SECRET（y.plan に出す申し込み・契約の管理のリンク、既定は出さない）、
+BLOCKED_GUILDS_FILE（利用を断るサーバーの一覧、既定 settings/blocked_guilds.txt）、
+ENABLE_SUDDEN_DEATH（「突然の死」コマンド sd を使えるようにするか、既定 True。False なら SD_MSG は省略可）
+を追加している。
 """
 
 from __future__ import annotations
@@ -17,6 +26,9 @@ import configparser
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+# PREMIUM_SYNC_TOKEN・PREMIUM_LINK_SECRET の最低の長さ（サイト側も同じ値で確かめる）
+from .premium_link import MIN_SECRET_LENGTH
 
 SECTION = "DEFAULT"
 
@@ -37,6 +49,10 @@ class Config:
     max_read_length: int = 100
     alert_webhook_url: str | None = None
     alert_after: int = 300
+    # ステータスページへの稼働状況の送信（URL とトークンの両方があるときだけ有効。yomi_kai.status_push）
+    status_push_url: str | None = None
+    status_push_token: str | None = None
+    status_push_interval: int = 300
     voicevox_workers: int = 1
     # True のときだけ、読み上げた本文を DEBUG ログ（ファイル）に出す
     log_read_text: bool = False
@@ -48,18 +64,40 @@ class Config:
     max_dict_entries: int = 0
     # 使える話者の名前（空なら全話者）
     speaker_allowlist: tuple[str, ...] = ()
+    # 個人辞書（1人あたり）の登録数の上限（0 で無制限）
+    max_user_dict_entries: int = 0
+    # プレミアムプラン（False ならすべてのサーバーが上の上限を使う）
+    premium_enabled: bool = False
+    premium_guilds_file: str = "settings/premium.json"
+    # プレミアムのサーバーの上限（0 で無制限、話者は空なら読み込んだ全話者）
+    premium_max_read_length: int = 0
+    premium_max_dict_entries: int = 0
+    premium_max_user_dict_entries: int = 0
+    premium_speaker_allowlist: tuple[str, ...] = ()
+    # Stripe の契約の同期（URL とトークンの両方があり、PREMIUM_ENABLED のときだけ有効。yomi_kai.premium_sync）
+    premium_sync_url: str | None = None
+    premium_sync_token: str | None = None
+    # y.plan に出す申し込み・契約の管理のリンク（両方があるときだけ。yomi_kai.premium_link）
+    premium_site_url: str | None = None
+    premium_link_secret: str | None = None
     # 利用を断るサーバーの ID を1行に1つ書いたファイル（無ければ何もブロックしない）
     blocked_guilds_file: str = "settings/blocked_guilds.txt"
+    # False なら「突然の死」コマンド（y.sd・/sd）を登録しない
+    enable_sudden_death: bool = True
 
     def __repr__(self) -> str:
         # トークン・APIキー・Webhook の URL がログ等に出ないようにする
         return (
             f"Config(prefix={self.prefix!r}, afk_time={self.afk_time}, use_google_tts={self.use_google_tts}, "
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
-            f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
+            f"alert_after={self.alert_after}, status_push={'on' if self.status_push_url else 'off'}, "
+            f"voicevox_workers={self.voicevox_workers}, "
             f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
-            f"blocked_guilds_file={self.blocked_guilds_file!r})"
+            f"max_user_dict_entries={self.max_user_dict_entries}, premium_enabled={self.premium_enabled}, "
+            f"premium_sync={'on' if self.premium_sync_url else 'off'}, "
+            f"premium_link={'on' if self.premium_link_secret else 'off'}, "
+            f"blocked_guilds_file={self.blocked_guilds_file!r}, enable_sudden_death={self.enable_sudden_death})"
         )
 
 
@@ -117,6 +155,26 @@ def _int(
     return value
 
 
+def _url_and_secret(
+    section: configparser.SectionProxy, url_key: str, secret_key: str
+) -> tuple[str | None, str | None]:
+    """https:// の URL と秘密の値の組を読む。両方とも空なら (None, None)。片方だけ・短すぎる値は ConfigError。
+
+    値そのものは秘密情報なので、エラーメッセージには出さない。
+    """
+    url = (section.get(url_key) or "").strip() or None
+    secret = (section.get(secret_key) or "").strip() or None
+    if url is not None and not url.startswith("https://"):
+        raise ConfigError(f"config.ini の `{url_key}` は https:// で始まる URL を指定してください。")
+    if (url is None) != (secret is None):
+        raise ConfigError(f"config.ini の `{url_key}` と `{secret_key}` は両方とも指定してください。")
+    if secret is not None and len(secret) < MIN_SECRET_LENGTH:
+        raise ConfigError(
+            f"config.ini の `{secret_key}` は {MIN_SECRET_LENGTH} 文字以上のランダムな文字列にしてください。"
+        )
+    return url, secret
+
+
 def load_config(path: str | Path = "config.ini") -> Config:
     """config.ini を読み込んで :class:`Config` を返す。不備があれば :class:`ConfigError` を送出する。"""
     path = Path(path)
@@ -137,7 +195,9 @@ def load_config(path: str | Path = "config.ini") -> Config:
         google_api_key = _required(section, "GOOGLE_API_KEY") if use_google_tts else section.get("GOOGLE_API_KEY")
         prefix = _required(section, "PREFIX")
         afk_time = _int(section, "AFK_TIME", None, 1, None, "秒数（整数）")
-        sd_msg = _required(section, "SD_MSG")
+        enable_sudden_death = _boolean(section, "ENABLE_SUDDEN_DEATH", True)
+        # sd を使わないなら SD_MSG は無くてもよい
+        sd_msg = _required(section, "SD_MSG") if enable_sudden_death else (section.get("SD_MSG") or "").strip()
         load_all = _boolean(section, "VOICEVOX_LOAD_ALL_MODELS", False)
         max_read_length = _int(section, "MAX_READ_LENGTH", 100, 0, None, "整数（0 で無制限）")
         alert_webhook_url = (section.get("ALERT_WEBHOOK_URL") or "").strip() or None
@@ -147,12 +207,32 @@ def load_config(path: str | Path = "config.ini") -> Config:
                 "config.ini の `ALERT_WEBHOOK_URL` は https:// で始まる Webhook の URL を指定してください。"
             )
         alert_after = _int(section, "ALERT_AFTER", 300, 30, None, "秒数（整数）")
+        status_push_url = (section.get("STATUS_PUSH_URL") or "").strip() or None
+        status_push_token = (section.get("STATUS_PUSH_TOKEN") or "").strip() or None
+        if status_push_url is not None and not status_push_url.startswith("https://"):
+            raise ConfigError("config.ini の `STATUS_PUSH_URL` は https:// で始まる URL を指定してください。")
+        if (status_push_url is None) != (status_push_token is None):
+            raise ConfigError("config.ini の `STATUS_PUSH_URL` と `STATUS_PUSH_TOKEN` は両方とも指定してください。")
+        status_push_interval = _int(section, "STATUS_PUSH_INTERVAL", 300, 60, None, "秒数（整数）")
         voicevox_workers = _int(section, "VOICEVOX_WORKERS", 1, 1, 8)
         log_read_text = _boolean(section, "LOG_READ_TEXT", False)
         record_usage = _boolean(section, "RECORD_USAGE", False)
         usage_dir = (section.get("USAGE_DIR") or "").strip() or "usage"
         max_dict_entries = _int(section, "MAX_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
         speaker_allowlist = tuple(dict.fromkeys(split_names(section.get("SPEAKER_ALLOWLIST") or "")))
+        max_user_dict_entries = _int(section, "MAX_USER_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
+        premium_enabled = _boolean(section, "PREMIUM_ENABLED", False)
+        premium_guilds_file = (section.get("PREMIUM_GUILDS_FILE") or "").strip() or "settings/premium.json"
+        premium_max_read_length = _int(section, "PREMIUM_MAX_READ_LENGTH", 0, 0, None, "整数（0 で無制限）")
+        premium_max_dict_entries = _int(section, "PREMIUM_MAX_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）")
+        premium_max_user_dict_entries = _int(
+            section, "PREMIUM_MAX_USER_DICT_ENTRIES", 0, 0, None, "整数（0 で無制限）"
+        )
+        premium_speaker_allowlist = tuple(
+            dict.fromkeys(split_names(section.get("PREMIUM_SPEAKER_ALLOWLIST") or ""))
+        )
+        premium_sync_url, premium_sync_token = _url_and_secret(section, "PREMIUM_SYNC_URL", "PREMIUM_SYNC_TOKEN")
+        premium_site_url, premium_link_secret = _url_and_secret(section, "PREMIUM_SITE_URL", "PREMIUM_LINK_SECRET")
         blocked_guilds_file = (section.get("BLOCKED_GUILDS_FILE") or "").strip() or "settings/blocked_guilds.txt"
     except configparser.Error as e:
         # 値に `%` が含まれる場合の InterpolationError など
@@ -169,11 +249,26 @@ def load_config(path: str | Path = "config.ini") -> Config:
         max_read_length=max_read_length,
         alert_webhook_url=alert_webhook_url,
         alert_after=alert_after,
+        status_push_url=status_push_url,
+        status_push_token=status_push_token,
+        status_push_interval=status_push_interval,
         voicevox_workers=voicevox_workers,
         log_read_text=log_read_text,
         record_usage=record_usage,
         usage_dir=usage_dir,
         max_dict_entries=max_dict_entries,
         speaker_allowlist=speaker_allowlist,
+        max_user_dict_entries=max_user_dict_entries,
+        premium_enabled=premium_enabled,
+        premium_guilds_file=premium_guilds_file,
+        premium_max_read_length=premium_max_read_length,
+        premium_max_dict_entries=premium_max_dict_entries,
+        premium_max_user_dict_entries=premium_max_user_dict_entries,
+        premium_speaker_allowlist=premium_speaker_allowlist,
+        premium_sync_url=premium_sync_url,
+        premium_sync_token=premium_sync_token,
+        premium_site_url=premium_site_url,
+        premium_link_secret=premium_link_secret,
         blocked_guilds_file=blocked_guilds_file,
+        enable_sudden_death=enable_sudden_death,
     )

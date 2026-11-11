@@ -66,7 +66,7 @@ class FailingEngine:
     def speakers(self):
         return [Speaker("ずんだもん", "fake")]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         raise RuntimeError("boom")
 
 

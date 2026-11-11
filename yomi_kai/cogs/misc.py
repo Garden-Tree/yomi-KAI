@@ -1,4 +1,8 @@
-"""「突然の死」コマンド（sd）と、音声のクレジット表記（credit）。``y.sd`` と ``/sd`` のどちらでも使える。"""
+"""「突然の死」コマンド（sd）と、音声のクレジット表記（credit）。``y.sd`` と ``/sd`` のどちらでも使える。
+
+sd は読み上げと関係ない機能なので、config.ini の ``ENABLE_SUDDEN_DEATH = False`` で登録しないようにできる
+（:class:`SuddenDeathCog` を追加しない）。credit は常に使える。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
+from ..plans import PlanManager
 from ..text import chunk_lines, gen_sd_text
 from ..tts import Speaker, TTSEngine
 from .common import EMBED_COLOR, handle_command_error, invalid_command_notice, reply
@@ -30,11 +35,12 @@ def credit_lines(speakers: Iterable[Speaker], use_google_tts: bool) -> list[str]
     return lines
 
 
-class MiscCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, engine: TTSEngine) -> None:
+class SuddenDeathCog(commands.Cog):
+    """「突然の死」コマンド（sd）。ENABLE_SUDDEN_DEATH = False なら Bot に追加しない。"""
+
+    def __init__(self, bot: commands.Bot, config: Config) -> None:
         self.bot = bot
         self.config = config
-        self.engine = engine
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         # 引数が多すぎる（例: y.sd a b）
@@ -63,12 +69,28 @@ class MiscCog(commands.Cog):
             return
         await reply(ctx, gen_sd_text(word))
 
+
+class MiscCog(commands.Cog):
+    def __init__(
+        self, bot: commands.Bot, config: Config, engine: TTSEngine, *, plans: PlanManager | None = None
+    ) -> None:
+        self.bot = bot
+        self.config = config
+        self.engine = engine
+        self.plans = plans if plans is not None else PlanManager(config, engine)
+
+    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
+        # 引数が多すぎる（例: y.credit a）
+        await handle_command_error(ctx, error, invalid_notice=invalid_command_notice(self.config.prefix))
+
     @commands.hybrid_command(
         name="credit",
         description="読み上げ音声のクレジット（VOICEVOX:ずんだもん など）を表示します",
         ignore_extra=False,
     )
     async def credit(self, ctx: commands.Context) -> None:
-        for chunk in chunk_lines(credit_lines(self.engine.speakers(), self.config.use_google_tts)):
+        # サーバーではそのサーバーで使える話者、DM ではフリーで使える話者
+        engine = self.plans.engine_for(ctx.guild.id if ctx.guild is not None else None)
+        for chunk in chunk_lines(credit_lines(engine.speakers(), self.config.use_google_tts)):
             await reply(ctx, chunk)
         logger.info("creditを表示")

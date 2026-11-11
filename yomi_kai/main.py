@@ -17,9 +17,15 @@ from discord.ext import commands
 from .blocklist import CHECK_INTERVAL, GuildBlocklist
 from .cogs.common import original_error
 from .config import Config, ConfigError, load_config
-from .dictionary import DictionaryStore
+from .dictionary import DictionaryStore, UserDictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
+from .plans import CHECK_INTERVAL as PREMIUM_CHECK_INTERVAL
+from .plans import PlanManager
+from .premium_sync import PremiumSyncer, http_fetcher
+from .rejoin import VoiceSessionRegistry
 from .settings import SettingsStore
+from .status import bot_version
+from .status_push import StatusPusher, build_payload, http_poster
 from .tts import TTSEngine
 from .usage import UsageStore
 
@@ -42,8 +48,10 @@ def build_engine(config: Config) -> TTSEngine:
     return CompositeEngine([google, voicevox], default_speaker=google.default_speaker)
 
 
-def apply_speaker_allowlist(engine: TTSEngine, allowlist: tuple[str, ...]) -> TTSEngine:
-    """SPEAKER_ALLOWLIST が指定されていれば、話者をその名前に絞ったエンジンを返す。
+def apply_speaker_allowlist(
+    engine: TTSEngine, allowlist: tuple[str, ...], key: str = "SPEAKER_ALLOWLIST"
+) -> TTSEngine:
+    """SPEAKER_ALLOWLIST（``key``）が指定されていれば、話者をその名前に絞ったエンジンを返す。
 
     存在しない名前は警告し、使える話者が1つも残らなければ :class:`ConfigError` を送出する。
     """
@@ -55,16 +63,30 @@ def apply_speaker_allowlist(engine: TTSEngine, allowlist: tuple[str, ...]) -> TT
         filtered = FilteredEngine(engine, allowlist)
     except ValueError:
         raise ConfigError(
-            "config.ini の `SPEAKER_ALLOWLIST` に使える話者がありません。"
+            f"config.ini の `{key}` に使える話者がありません。"
             f"`{'` `'.join(allowlist)}` はいずれも見つかりませんでした"
             "（話者の名前は `voice list` の表示どおりにカンマ区切りで指定してください）。"
         ) from None
     if filtered.unknown:
-        logger.warning("SPEAKER_ALLOWLIST の次の話者は見つからないため無視します: %s", "、".join(filtered.unknown))
+        logger.warning("%s の次の話者は見つからないため無視します: %s", key, "、".join(filtered.unknown))
     logger.info(
-        "話者を%d件に絞りました（既定の話者: %s）", len(filtered.speakers()), filtered.default_speaker
+        "%s: 話者を%d件に絞りました（既定の話者: %s）", key, len(filtered.speakers()), filtered.default_speaker
     )
     return filtered
+
+
+def build_plans(config: Config, engine: TTSEngine) -> PlanManager:
+    """読み込んだ全話者のエンジンから、フリー・プレミアムで使える話者に絞ったエンジンを作り、プランを組み立てる。
+
+    使える話者が1つも残らなければ :class:`ConfigError` を送出する。
+    """
+    free_engine = apply_speaker_allowlist(engine, config.speaker_allowlist)
+    premium_engine = None
+    if config.premium_enabled:
+        premium_engine = apply_speaker_allowlist(
+            engine, config.premium_speaker_allowlist, key="PREMIUM_SPEAKER_ALLOWLIST"
+        )
+    return PlanManager(config, free_engine, premium_engine=premium_engine, base_engine=engine)
 
 
 class YomiBot(commands.Bot):
@@ -75,6 +97,9 @@ class YomiBot(commands.Bot):
         store: DictionaryStore,
         settings: SettingsStore,
         usage: UsageStore | None = None,
+        plans: PlanManager | None = None,
+        user_store: UserDictionaryStore | None = None,
+        voice_sessions: VoiceSessionRegistry | None = None,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -89,7 +114,30 @@ class YomiBot(commands.Bot):
         self.config = config
         self.engine = engine
         self.store = store
+        # 個人辞書（既定はサーバー辞書のディレクトリの users/）
+        self.user_store = user_store if user_store is not None else UserDictionaryStore(store.directory / "users")
         self.settings = settings
+        # 接続中のボイスチャンネルの記録（再起動後の自動再接続。既定は settings/voice_sessions.json）
+        self.voice_sessions = (
+            voice_sessions
+            if voice_sessions is not None
+            else VoiceSessionRegistry(settings.directory / "voice_sessions.json")
+        )
+        # サーバーごとの上限と使える話者（engine はフリーで使える話者に絞ったエンジン）
+        self.plans = plans if plans is not None else PlanManager(config, engine)
+        self._premium_task: asyncio.Task[None] | None = None
+        # Stripe の契約の同期（PREMIUM_ENABLED で PREMIUM_SYNC_URL / PREMIUM_SYNC_TOKEN があるときだけ）
+        self.premium_syncer: PremiumSyncer | None = None
+        self._premium_sync_task: asyncio.Task[None] | None = None
+        if self.plans.enabled and config.premium_sync_url and config.premium_sync_token:
+            self.premium_syncer = PremiumSyncer(
+                http_fetcher(config.premium_sync_url, config.premium_sync_token),
+                config.premium_guilds_file,
+                on_change=self.plans.reload,
+            )
+            logger.info("Stripe の契約の同期を有効にしました (%s)", mask_url(config.premium_sync_url))
+        elif config.premium_sync_url:
+            logger.warning("PREMIUM_ENABLED = False のため、PREMIUM_SYNC_URL は使いません")
         # 起動した時刻（y.status の稼働時間）
         self.started_at = time.time()
         # 使用量の計測（RECORD_USAGE = True のときだけ。本文は保存しない）
@@ -110,6 +158,20 @@ class YomiBot(commands.Bot):
         if config.alert_webhook_url:
             self.alerter = DisconnectAlerter(webhook_sender(config.alert_webhook_url), alert_after=config.alert_after)
             logger.info("切断通知を有効にしました (%s, %d秒)", mask_url(config.alert_webhook_url), config.alert_after)
+        self.status_pusher: StatusPusher | None = None
+        self._status_push_task: asyncio.Task[None] | None = None
+        if config.status_push_url and config.status_push_token:
+            self.status_pusher = StatusPusher(
+                http_poster(config.status_push_url, config.status_push_token),
+                self.status_payload,
+                self.is_gateway_alive,
+                interval=config.status_push_interval,
+            )
+            logger.info(
+                "稼働状況の送信を有効にしました (%s, %d秒ごと)",
+                mask_url(config.status_push_url),
+                config.status_push_interval,
+            )
 
     # --- 接続監視（yomi_kai.health） ---
     def is_gateway_alive(self) -> bool:
@@ -117,8 +179,16 @@ class YomiBot(commands.Bot):
             return False
         return self.is_ready() and not self.is_closed() and math.isfinite(self.latency)
 
+    def status_payload(self) -> dict:
+        """ステータスページに送る稼働状況（yomi_kai.status_push）。"""
+        latency = getattr(self.get_cog("VoiceCog"), "latency", None)
+        summary = latency.summary() if latency is not None else None
+        return build_payload(bot_version(), summary, len(self.voice_clients))
+
     def _start_monitoring(self) -> None:
         self._heartbeat_task = asyncio.create_task(heartbeat_loop(self.is_gateway_alive), name="yomi-kai-heartbeat")
+        if self.status_pusher is not None:
+            self._status_push_task = asyncio.create_task(self.status_pusher.run(), name="yomi-kai-status-push")
         if self.usage is not None:
             self._usage_task = asyncio.create_task(self.usage.run_flusher(), name="yomi-kai-usage")
         if self.alerter is not None:
@@ -140,8 +210,14 @@ class YomiBot(commands.Bot):
             self._heartbeat_task.cancel()
         if self._usage_task is not None:
             self._usage_task.cancel()
+        if self._status_push_task is not None:
+            self._status_push_task.cancel()
         if self._blocklist_task is not None:
             self._blocklist_task.cancel()
+        if self._premium_task is not None:
+            self._premium_task.cancel()
+        if self._premium_sync_task is not None:
+            self._premium_sync_task.cancel()
         if self.alerter is not None:
             await self.alerter.close()
         # Cog の取り外し（読み上げの停止）まで済んでから、残りの使用量を書き込む
@@ -196,6 +272,15 @@ class YomiBot(commands.Bot):
             except Exception:
                 logger.exception("ブロックリストの確認に失敗しました")
 
+    async def _watch_premium(self, interval: float = PREMIUM_CHECK_INTERVAL) -> None:
+        """プレミアムの一覧（settings/premium.json）の更新を interval 秒ごとに確認する。"""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await asyncio.to_thread(self.plans.reload)
+            except Exception:
+                logger.exception("プレミアムの一覧の確認に失敗しました")
+
     # --- 終了（docker stop の SIGTERM） ---
     def install_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> bool:
         """SIGTERM で ``close()`` するようにする。登録できなければ（Windows など）False。
@@ -221,10 +306,16 @@ class YomiBot(commands.Bot):
         self._start_monitoring()
         await asyncio.to_thread(self.blocklist.reload_if_changed)
         self._blocklist_task = asyncio.create_task(self._watch_blocklist(), name="yomi-kai-blocklist")
+        if self.plans.enabled:
+            await asyncio.to_thread(self.plans.reload)
+            self._premium_task = asyncio.create_task(self._watch_premium(), name="yomi-kai-premium")
+        if self.premium_syncer is not None:
+            self._premium_sync_task = asyncio.create_task(self.premium_syncer.run(), name="yomi-kai-premium-sync")
 
         from .cogs.admin import AdminCog
         from .cogs.dictionary import DictionaryCog
-        from .cogs.misc import MiscCog
+        from .cogs.misc import MiscCog, SuddenDeathCog
+        from .cogs.plan import PlanCog
         from .cogs.settings import SettingsCog
         from .cogs.voice import VoiceCog
         from .session import ffmpeg_available, ffmpeg_source_factory, find_ffmpeg
@@ -246,12 +337,21 @@ class YomiBot(commands.Bot):
                 ffmpeg_source_factory(ffmpeg_path),
                 usage=self.usage,
                 blocklist=self.blocklist,
+                plans=self.plans,
+                user_store=self.user_store,
+                voice_sessions=self.voice_sessions,
             )
         )
-        await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings))
-        await self.add_cog(DictionaryCog(self, self.config, self.store))
-        await self.add_cog(MiscCog(self, self.config, self.engine))
+        await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings, plans=self.plans))
+        await self.add_cog(
+            DictionaryCog(self, self.config, self.store, plans=self.plans, user_store=self.user_store)
+        )
+        await self.add_cog(MiscCog(self, self.config, self.engine, plans=self.plans))
+        if self.config.enable_sudden_death:
+            # 読み上げと関係ない機能なので、公開版では ENABLE_SUDDEN_DEATH = False で外せる
+            await self.add_cog(SuddenDeathCog(self, self.config))
         await self.add_cog(AdminCog(self, self.config, self.settings))
+        await self.add_cog(PlanCog(self, self.config, self.plans, self.store, self.user_store))
         await self.sync_app_commands()
 
     async def sync_app_commands(self) -> None:
@@ -313,14 +413,14 @@ def main(config_path: str = "config.ini") -> None:
         )
         sys.exit(1)
     try:
-        engine = apply_speaker_allowlist(engine, config.speaker_allowlist)
+        plans = build_plans(config, engine)
     except ConfigError as e:
         logger.error("%s", e)
         sys.exit(1)
 
     Path("dict").mkdir(exist_ok=True)
     Path("settings").mkdir(exist_ok=True)
-    bot = YomiBot(config, engine, DictionaryStore("dict"), SettingsStore("settings"))
+    bot = YomiBot(config, plans.free_engine, DictionaryStore("dict"), SettingsStore("settings"), plans=plans)
     try:
         # ログ設定は setup_logging で済んでいるので、discord.py 独自のハンドラは付けない（二重出力防止）
         bot.run(config.discord_token, log_handler=None)

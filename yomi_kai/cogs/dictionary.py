@@ -16,7 +16,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
-from ..dictionary import DictionaryStore, InvalidEntryError, validate_entry
+from ..dictionary import DictionaryStore, InvalidEntryError, UserDictionaryStore, validate_entry
+from ..plans import PlanManager
+from ..text import chunk_lines
 from .common import (
     EMBED_COLOR,
     guild_only_check,
@@ -40,6 +42,15 @@ DICT_FAILED_NOTICE = "辞書の保存に失敗しました"
 
 def dict_full_notice(limit: int) -> str:
     return f"辞書の登録数が上限（{limit}件）に達しています。不要な単語を削除してください"
+
+
+def mydict_full_notice(limit: int) -> str:
+    return f"個人辞書の登録数が上限（{limit}件）に達しています。不要な単語を削除してください"
+
+
+def format_words(words: dict[str, str]) -> list[str]:
+    """「単語 → 読み」の行。"""
+    return [f"{word} → {reading}" for word, reading in words.items()]
 
 
 def export_dictionary(words: dict[str, str]) -> bytes:
@@ -67,10 +78,22 @@ def parse_dictionary_import(data: bytes) -> dict[str, str]:
 
 
 class DictionaryCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, store: DictionaryStore) -> None:
+    def __init__(
+        self,
+        bot: commands.Bot,
+        config: Config,
+        store: DictionaryStore,
+        *,
+        plans: PlanManager | None = None,
+        user_store: UserDictionaryStore | None = None,
+    ) -> None:
         self.bot = bot
         self.config = config
         self.store = store
+        # 個人辞書（y.mydict）。省略時はサーバー辞書のディレクトリの users/ に置く
+        self.user_store = user_store if user_store is not None else UserDictionaryStore(store.directory / "users")
+        # 辞書の登録数の上限はプランで決まる（省略時は config の MAX_DICT_ENTRIES）
+        self.plans = plans
 
     async def cog_check(self, ctx: commands.Context) -> bool:
         return guild_only_check(ctx)
@@ -85,6 +108,15 @@ class DictionaryCog(commands.Cog):
             failed_notice=DICT_FAILED_NOTICE,
         )
 
+    def _dict_limit(self, guild_id: int) -> int:
+        if self.plans is None:
+            return self.config.max_dict_entries
+        return self.plans.limits_for(guild_id).max_dict_entries
+
+    def _user_dict_limit(self, guild_id: int) -> int:
+        if self.plans is None:
+            return self.config.max_user_dict_entries
+        return self.plans.limits_for(guild_id).max_user_dict_entries
     @commands.hybrid_group(name="dict", invoke_without_command=True, description="サーバーの読み上げ辞書を操作します")
     @app_commands.guild_only()
     async def dict_group(self, ctx: commands.Context, *args: str) -> None:
@@ -94,7 +126,7 @@ class DictionaryCog(commands.Cog):
     @dict_group.command(name="add", description="単語の読み方を辞書に登録します", ignore_extra=False)
     @app_commands.describe(word="単語（50文字まで）", reading="読み方（100文字まで）")
     async def dict_add(self, ctx: commands.Context, word: str, reading: str) -> None:
-        limit = self.config.max_dict_entries
+        limit = self._dict_limit(ctx.guild.id)
         try:
             added = await asyncio.to_thread(self.store.add, ctx.guild.id, word, reading, max_entries=limit)
         except InvalidEntryError as e:
@@ -153,7 +185,7 @@ class DictionaryCog(commands.Cog):
         except ValueError as e:
             await reply(ctx, f"辞書を読み込めませんでした: {e}", private=True)
             return
-        limit = self.config.max_dict_entries
+        limit = self._dict_limit(ctx.guild.id)
         added, updated, skipped = await asyncio.to_thread(self.store.merge, ctx.guild.id, entries, max_entries=limit)
         message = f"辞書を読み込みました（追加 {added}件、更新 {updated}件）"
         if skipped:
@@ -178,6 +210,59 @@ class DictionaryCog(commands.Cog):
             value="添付した JSON ファイルの辞書を読み込みます（サーバー管理の権限が必要）。",
             inline=False,
         )
+        embed.add_field(
+            name=f"{prefix}mydict add `word` `yomi` / del `word` / list",
+            value="自分の発言だけに使う個人辞書です（サーバーの辞書より先に使います）。",
+            inline=False,
+        )
         embed.add_field(name=f"{prefix}dict help", value="このヘルプを表示します。", inline=False)
         await reply(ctx, embed=embed)
         logger.info("dict helpを表示")
+
+    # --- 個人辞書（y.mydict） ---
+    @commands.hybrid_group(
+        name="mydict", invoke_without_command=True, description="自分の発言だけに使う個人辞書を操作します"
+    )
+    @app_commands.guild_only()
+    async def mydict_group(self, ctx: commands.Context, *args: str) -> None:
+        await reply_invalid(ctx, self.config.prefix, "dict help")
+
+    @mydict_group.command(name="add", description="自分の個人辞書に単語の読み方を登録します", ignore_extra=False)
+    @app_commands.describe(word="単語（50文字まで）", reading="読み方（100文字まで）")
+    async def mydict_add(self, ctx: commands.Context, word: str, reading: str) -> None:
+        guild_id, user_id = ctx.guild.id, ctx.author.id
+        limit = self._user_dict_limit(guild_id)
+        try:
+            added = await asyncio.to_thread(
+                self.user_store.add, guild_id, user_id, word, reading, max_entries=limit
+            )
+        except InvalidEntryError as e:
+            await reply(ctx, f"個人辞書に登録できません: {e}", private=True)
+            return
+        if not added:
+            await reply(ctx, mydict_full_notice(limit), private=True)
+            logger.info("個人辞書の登録数が上限（%d件）のため追加しませんでした (guild=%s)", limit, guild_id)
+            return
+        await reply(ctx, f"個人辞書に登録しました: {word} → {reading}", private=True)
+        logger.info("個人辞書に%sを%sとして追加しました (guild=%s, user=%s)", word, reading, guild_id, user_id)
+
+    @mydict_group.command(name="del", description="自分の個人辞書から単語を削除します", ignore_extra=False)
+    @app_commands.describe(word="削除する単語")
+    async def mydict_del(self, ctx: commands.Context, word: str) -> None:
+        guild_id, user_id = ctx.guild.id, ctx.author.id
+        if not await asyncio.to_thread(self.user_store.remove, guild_id, user_id, word):
+            await reply(ctx, f"`{word}`は個人辞書に登録されていません", private=True)
+            return
+        await reply(ctx, f"個人辞書から`{word}`を削除しました", private=True)
+        logger.info("個人辞書から%sを削除しました (guild=%s, user=%s)", word, guild_id, user_id)
+
+    @mydict_group.command(name="list", description="自分の個人辞書を表示します", ignore_extra=False)
+    async def mydict_list(self, ctx: commands.Context) -> None:
+        words = await self.user_store.awords(ctx.guild.id, ctx.author.id)
+        limit = self._user_dict_limit(ctx.guild.id)
+        header = f"個人辞書（{len(words)}件" + (f" / 上限{limit}件）" if limit > 0 else "）")
+        if not words:
+            await reply(ctx, f"{header}: まだ登録がありません", private=True)
+            return
+        for chunk in chunk_lines([f"{header}:", *format_words(words)]):
+            await reply(ctx, chunk, private=True)

@@ -19,8 +19,10 @@ import asyncio
 import contextlib
 import io
 import logging
+import math
 import os
 import shutil
+import statistics
 import time
 from collections import deque
 from collections.abc import Callable
@@ -90,6 +92,59 @@ class SynthesisStats:
         return self.last_success is not None and self.last_success >= self.last_error
 
 
+# 読み上げの開始までの時間を、サーバーごとに直近この件数だけ覚えておく
+LATENCY_SAMPLES = 100
+
+
+@dataclass(frozen=True)
+class LatencySummary:
+    """読み上げの開始までの時間（秒）の集計。"""
+
+    count: int
+    median: float
+    p95: float
+
+
+def percentile(sorted_values: list[float], fraction: float) -> float:
+    """昇順に並べた値の、最近傍順位法による百分位数（``fraction`` は 0〜1）。空なら ValueError。"""
+    if not sorted_values:
+        raise ValueError("値がありません")
+    rank = max(1, math.ceil(fraction * len(sorted_values)))
+    return sorted_values[min(rank, len(sorted_values)) - 1]
+
+
+class LatencyStats:
+    """メッセージの受信から読み上げ（再生）の開始までの時間の記録（全サーバー共通の入れ物、y.status で表示）。
+
+    サーバーごとに直近 ``maxlen`` 件だけを持つ（本文などは持たない）。時刻は ``clock``（既定は単調時計）で測る。
+    """
+
+    def __init__(self, maxlen: int = LATENCY_SAMPLES, clock: Callable[[], float] = time.monotonic) -> None:
+        self.maxlen = maxlen
+        self.clock = clock
+        self._samples: dict[int, deque[float]] = {}
+
+    def record(self, guild_id: int, seconds: float) -> None:
+        samples = self._samples.get(guild_id)
+        if samples is None:
+            samples = self._samples[guild_id] = deque(maxlen=self.maxlen)
+        samples.append(max(0.0, seconds))
+
+    def forget(self, guild_id: int) -> None:
+        self._samples.pop(guild_id, None)
+
+    def summary(self, guild_id: int | None = None) -> LatencySummary | None:
+        """``guild_id`` のサーバー（None なら全サーバー）の集計。記録が無ければ None。"""
+        if guild_id is None:
+            values = [v for samples in self._samples.values() for v in samples]
+        else:
+            values = list(self._samples.get(guild_id, ()))
+        if not values:
+            return None
+        values.sort()
+        return LatencySummary(len(values), statistics.median(values), percentile(values, 0.95))
+
+
 def find_ffmpeg() -> str:
     """ffmpeg の実行ファイル: ./lib/ffmpeg.exe → ./ffmpeg.exe → PATH 上の ffmpeg の順に探す。
 
@@ -125,6 +180,9 @@ class _Message:
     speed: float
     epoch: int
     speedup: bool = False  # 混雑時の早読みの対象か
+    pitch: float = 0.0  # 声の高さ（TTSEngine の pitch）
+    # メッセージを受け取った時刻（LatencyStats.clock）。最初のかたまりの再生を始めたら None にする
+    received_at: float | None = None
     next_chunk: int = 0  # 次に合成を始めるかたまりの位置
     skipped: bool = False
     failure_notified: bool = False
@@ -154,9 +212,11 @@ class GuildSession:
         source_factory: SourceFactory,
         prefetch_chunks: int = PREFETCH_CHUNKS,
         stats: SynthesisStats | None = None,
+        latency: LatencyStats | None = None,
     ) -> None:
         self.guild_id = guild_id
         self.stats = stats
+        self.latency = latency
         self.engine = engine
         self.afk_time = afk_time
         self.prefetch_chunks = prefetch_chunks
@@ -257,15 +317,27 @@ class GuildSession:
                     logger.exception("切断通知の送信に失敗しました (guild=%s)", self.guild_id)
 
     # --- 読み上げ ---
-    def enqueue(self, text: str, speaker: str, speed: float = 1.0, *, speedup: bool = False) -> bool:
+    def enqueue(
+        self,
+        text: str,
+        speaker: str,
+        speed: float = 1.0,
+        *,
+        speedup: bool = False,
+        received_at: float | None = None,
+        pitch: float = 0.0,
+    ) -> bool:
         """読み上げキューに追加する（合成用のかたまりに分ける）。未接続なら何もせず False。AFKタイマーを張り直す。
 
         ``speedup=True`` なら混雑時の早読み（``backlog_speed``）の対象にする。
+        ``received_at``（``latency.clock`` の時刻）を渡すと、再生を始めたときに受信からの時間を記録する。
         """
         if not self.is_connected:
             return False
         chunks = split_for_synthesis(text) or [text]
-        self._messages.append(_Message(chunks, speaker, speed, self._epoch, speedup))
+        self._messages.append(
+            _Message(chunks, speaker, speed, self._epoch, speedup, pitch=pitch, received_at=received_at)
+        )
         self._wakeup.set()
         self._reset_afk_timer()
         return True
@@ -313,8 +385,8 @@ class GuildSession:
     def _is_live(self, message: _Message) -> bool:
         return not message.skipped and message.epoch == self._epoch
 
-    async def _synthesize(self, text: str, speaker: str, speed: float) -> bytes:
-        return await synthesize_async(self.engine, text, speaker, speed)
+    async def _synthesize(self, text: str, speaker: str, speed: float, pitch: float = 0.0) -> bytes:
+        return await synthesize_async(self.engine, text, speaker, speed, pitch)
 
     def _fill_pipeline(self) -> None:
         """再生前のかたまりが prefetch_chunks 個になるまで、次のかたまりの合成を始める（メッセージをまたぐ）。"""
@@ -328,7 +400,7 @@ class GuildSession:
                 message.speed = backlog_speed(message.speed, self.pending)
             text = message.chunks[message.next_chunk]
             message.next_chunk += 1
-            task = asyncio.create_task(self._synthesize(text, message.speaker, message.speed))
+            task = asyncio.create_task(self._synthesize(text, message.speaker, message.speed, message.pitch))
             task.add_done_callback(_consume_result)
             self._pipeline.append(_Job(message, task))
 
@@ -371,6 +443,7 @@ class GuildSession:
             else:
                 self.stats.failure()
         if error is not None:
+            message.received_at = None  # 失敗したメッセージは読み上げの開始までの時間に数えない
             logger.error("音声合成に失敗しました (guild=%s)", self.guild_id, exc_info=error)
             if not message.failure_notified:  # 1メッセージにつき1回だけ通知する
                 message.failure_notified = True
@@ -386,6 +459,7 @@ class GuildSession:
 
     async def _play(self, wav: bytes) -> None:
         voice_client = self.voice_client
+        message = self._playing  # 読み上げの開始までの時間を記録するメッセージ（_step が設定する）
         if voice_client is None:
             return
         loop = asyncio.get_running_loop()
@@ -405,11 +479,24 @@ class GuildSession:
             voice_client.play(source, after=after)
         except Exception:
             logger.exception("再生の開始に失敗しました (guild=%s)", self.guild_id)
+            if message is not None:
+                message.received_at = None  # 再生できなかったメッセージは数えない
             cleanup = getattr(source, "cleanup", None)
             if cleanup is not None:
                 cleanup()
             return
+        if message is not None:
+            self._record_latency(message)
         await finished.wait()
+
+    def _record_latency(self, message: _Message) -> None:
+        """メッセージの最初のかたまりの再生を始めたときに、受信からの時間を記録する。"""
+        received_at, message.received_at = message.received_at, None
+        if received_at is None or self.latency is None:
+            return
+        elapsed = self.latency.clock() - received_at
+        self.latency.record(self.guild_id, elapsed)
+        logger.debug("受信から読み上げの開始まで %.0fms (guild=%s)", elapsed * 1000, self.guild_id)
 
     async def _notify(self, content: str) -> None:
         if self.text_channel is None:
