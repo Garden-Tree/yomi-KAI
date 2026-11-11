@@ -18,11 +18,28 @@ from discord.ext import commands
 
 from ..config import Config
 from ..plans import PlanManager
-from ..settings import DEFAULT_SPEED, PITCH_MAX, PITCH_MIN, SPEED_MAX, SPEED_MIN, SettingsStore
+from ..settings import (
+    DEFAULT_SPEED,
+    PITCH_MAX,
+    PITCH_MIN,
+    READ_KEYS,
+    SPEED_MAX,
+    SPEED_MIN,
+    GuildSettings,
+    SettingsStore,
+)
 from ..text import chunk_lines
 from ..tts import TTSEngine, find_speakers
 from ..ui import MAX_OPTIONS, DropdownView
-from .common import SAVE_FAILED_NOTICE, guild_only_check, handle_command_error, invalid_command_notice, reply
+from .common import (
+    MANAGE_GUILD_NOTICE,
+    SAVE_FAILED_NOTICE,
+    guild_only_check,
+    handle_command_error,
+    invalid_command_notice,
+    reply,
+    reply_invalid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +63,24 @@ def parse_speed(raw: str) -> float | None:
     if not math.isfinite(speed) or not SPEED_MIN <= speed <= SPEED_MAX:
         return None
     return speed
+
+
+# y.read の対象: 名前 -> (表示名, オンのときの読み方, オフのときの読み方)
+READ_TARGETS = {
+    "url": ("URL", "「URL」と読む", "読まない"),
+    "emoji": ("サーバー絵文字", "名前を読む", "読まない"),
+    "code": ("コードブロック", "中身を読む", "「コード省略」と読む"),
+    "spoiler": ("ネタバレ", "中身を読む", "「ネタバレ」と読む"),
+}
+
+
+def read_state_line(target: str, enabled: bool) -> str:
+    label, on, off = READ_TARGETS[target]
+    return f"{label}: {on if enabled else off}（{'on' if enabled else 'off'}）"
+
+
+def read_state_lines(settings: GuildSettings) -> list[str]:
+    return [read_state_line(target, getattr(settings, key)) for target, key in READ_KEYS.items()]
 
 
 def format_pitch(level: int) -> str:
@@ -272,3 +307,62 @@ class SettingsCog(commands.Cog):
         await asyncio.to_thread(self.settings.set_user_pitch, guild_id, user.id, level)
         await reply(ctx, f"{user.display_name}さんの声の高さを{format_pitch(level)}にしました", private=True)
         logger.info("%sさんの声の高さを%sに変更しました (guild=%s)", user, level, guild_id)
+
+    # --- 読み上げの切り替え（y.read） ---
+    @commands.hybrid_group(
+        name="read", invoke_without_command=True, description="URL・絵文字・コード・ネタバレの読み方を設定します"
+    )
+    @app_commands.guild_only()
+    async def read_group(self, ctx: commands.Context, *args: str) -> None:
+        # サブコマンドなし（プレフィックスのみ）は現在の設定を表示。一致しないサブコマンドは案内
+        if args:
+            await reply_invalid(ctx, self.config.prefix)
+            return
+        await self._send_read_settings(ctx)
+
+    async def _send_read_settings(self, ctx: commands.Context) -> None:
+        settings = await self.settings.aget(ctx.guild.id)
+        await reply(ctx, "\n".join(["読み上げの設定（サーバー全体）:", *read_state_lines(settings)]))
+
+    @read_group.command(
+        name="list", description="URL・絵文字・コード・ネタバレの読み方を表示します", ignore_extra=False
+    )
+    async def read_list(self, ctx: commands.Context) -> None:
+        await self._send_read_settings(ctx)
+
+    async def _read_toggle(self, ctx: commands.Context, target: str, state: str | None) -> None:
+        guild_id = ctx.guild.id
+        key = READ_KEYS[target]
+        if state is None:
+            enabled = getattr(await self.settings.aget(guild_id), key)
+            await reply(ctx, read_state_line(target, enabled))
+            return
+        # 表示は誰でもできる。変更は「サーバー管理」の権限が必要
+        permissions = getattr(ctx.author, "guild_permissions", None)
+        if permissions is None or not permissions.manage_guild:
+            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
+            return
+        enabled = state == "on"
+        await asyncio.to_thread(self.settings.set_flag, guild_id, key, enabled)
+        await reply(ctx, f"{read_state_line(target, enabled)}にしました")
+        logger.info("読み上げの設定 %s を%sにしました (guild=%s)", key, state, guild_id)
+
+    @read_group.command(name="url", description="URL を「URL」と読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で「URL」と読む、off で読まない（省略すると現在の設定を表示）")
+    async def read_url(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "url", state)
+
+    @read_group.command(name="emoji", description="サーバー絵文字の名前を読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で名前を読む、off で読まない（省略すると現在の設定を表示）")
+    async def read_emoji(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "emoji", state)
+
+    @read_group.command(name="code", description="コードブロックの中身を読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で中身を読む、off で「コード省略」と読む（省略すると現在の設定を表示）")
+    async def read_code(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "code", state)
+
+    @read_group.command(name="spoiler", description="ネタバレ（||...||）の中身を読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で中身を読む、off で「ネタバレ」と読む（省略すると現在の設定を表示）")
+    async def read_spoiler(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "spoiler", state)

@@ -189,6 +189,8 @@ class VoiceCog(commands.Cog):
                 f"`{prefix}ignore add|del @ユーザー|@ロール`・`{prefix}ignore list`: 読み上げない人・ロール\n"
                 f"`{prefix}autojoin add|del`・`{prefix}autojoin list`: VC に人が入ったら自動で接続\n"
                 f"`{prefix}readbots on|off`: ほかの Bot・Webhook の発言も読み上げる\n"
+                f"`{prefix}read url|emoji|code|spoiler on|off`: URL・絵文字・コード・ネタバレの読み方"
+                f"（`{prefix}read list` で確認）\n"
                 f"`{prefix}dict import`: 添付した JSON の辞書を読み込む（`{prefix}dict export` で書き出し）"
             ),
             inline=False,
@@ -423,6 +425,7 @@ class VoiceCog(commands.Cog):
                 [(a.content_type, a.filename) for a in message.attachments],
                 [s.name for s in message.stickers],
             ),
+            options=settings.read_options(),
         )
 
         # 空メッセージ（埋め込みのみ等）は読み上げをスキップ

@@ -73,6 +73,28 @@ _UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])(_{1,2})([^_\n]+?)\1(?![A-Za-z0-9
 
 
 CODE_BLOCK_TEXT = "コード省略"
+SPOILER_TEXT = "ネタバレ"
+URL_TEXT = "URL"
+# コードブロックの中身を読むときに外す、最初の行の言語指定（```py など）
+_CODE_BLOCK_CONTENT_RE = re.compile(r"```(?:[A-Za-z0-9_+#.-]*\n)?(.*?)```", flags=re.DOTALL)
+_SPOILER_CONTENT_RE = re.compile(r"\|\|(.*?)\|\|", flags=re.DOTALL)
+
+
+@dataclass(frozen=True)
+class ReadOptions:
+    """サーバーごとの読み上げの切り替え（y.read）。既定は従来どおりの読み方。"""
+
+    # True: URL を「URL」と読む / False: 読まない
+    url: bool = True
+    # True: サーバー絵文字の名前を読む / False: 読まない
+    emoji: bool = True
+    # True: コードブロックの中身を読む / False: 「コード省略」と読む
+    code: bool = False
+    # True: ネタバレ（||...||）の中身を読む / False: 「ネタバレ」と読む
+    spoiler: bool = False
+
+
+DEFAULT_READ_OPTIONS = ReadOptions()
 TRUNCATED_SUFFIX = " 以下略"
 # 辞書を当てる前の本文の上限（Discord のメッセージの上限）と、辞書を当てたあとの上限。
 # 最終的な長さは MAX_READ_LENGTH（build_read_text の max_length）で切り詰める
@@ -108,9 +130,15 @@ def _restore(text: str, tokens: Sequence[str]) -> str:
     return _PLACEHOLDER_RE.sub(put_back, text)
 
 
-def replace_code(text: str) -> str:
-    """コードブロックは「コード省略」に、インラインコードは中身だけにする。"""
-    text = _CODE_BLOCK_RE.sub(CODE_BLOCK_TEXT, text)
+def replace_code(text: str, read: bool = False) -> str:
+    """コードブロックは「コード省略」に（``read=True`` なら言語指定を除いた中身に）する。
+
+    インラインコードは中身だけにする。
+    """
+    if read:
+        text = _CODE_BLOCK_CONTENT_RE.sub(lambda m: m.group(1).strip(), text)
+    else:
+        text = _CODE_BLOCK_RE.sub(CODE_BLOCK_TEXT, text)
     text = _INLINE_CODE_RE.sub(r"\2", text)
     return text
 
@@ -122,12 +150,16 @@ def truncate(text: str, max_length: int) -> str:
     return text[:max_length].rstrip() + TRUNCATED_SUFFIX
 
 
-def replace_urls(text: str) -> str:
-    return _URL_RE.sub("URL", text)
+def replace_urls(text: str, read: bool = True) -> str:
+    """URL を「URL」に置き換える（``read=False`` なら消す）。"""
+    return _URL_RE.sub(URL_TEXT if read else "", text)
 
 
-def replace_spoilers(text: str) -> str:
-    return _SPOILER_RE.sub("ネタバレ", text)
+def replace_spoilers(text: str, read: bool = False) -> str:
+    """ネタバレ（||...||）を「ネタバレ」に置き換える（``read=True`` なら中身だけにする）。"""
+    if read:
+        return _SPOILER_CONTENT_RE.sub(r"\1", text)
+    return _SPOILER_RE.sub(SPOILER_TEXT, text)
 
 
 def replace_mentions(
@@ -146,9 +178,9 @@ def replace_mentions(
     return text
 
 
-def replace_custom_emojis(text: str) -> str:
-    """サーバー絵文字（アニメーション絵文字 <a:name:id> も含む）を名前に置換する。"""
-    return _CUSTOM_EMOJI_RE.sub(r"\1", text)
+def replace_custom_emojis(text: str, read: bool = True) -> str:
+    """サーバー絵文字（アニメーション絵文字 <a:name:id> も含む）を名前に置換する（``read=False`` なら消す）。"""
+    return _CUSTOM_EMOJI_RE.sub(r"\1" if read else "", text)
 
 
 def strip_markdown(text: str) -> str:
@@ -166,6 +198,7 @@ def build_read_text(
     channel_name: NameResolver | None = None,
     max_length: int = 0,
     attachments: str = "",
+    options: ReadOptions = DEFAULT_READ_OPTIONS,
 ) -> str:
     """メッセージ本文を読み上げ用に整形する。
 
@@ -175,15 +208,16 @@ def build_read_text(
     辞書置換のあいだ、メンション・サーバー絵文字（``<@123>`` など）は辞書で壊れないように守っておく。
     辞書置換の前の本文は ``MAX_INPUT_LENGTH``、置換後は ``MAX_EXPANDED_LENGTH`` 文字で打ち切る。
     ``max_length`` が正なら、添付ファイルの説明も含めた整形後の文字数で切り詰める（0 以下で無制限）。
+    ``options`` でサーバーごとの URL・サーバー絵文字・コードブロック・ネタバレの読み方を切り替える。
     """
-    text = replace_code(text[:MAX_INPUT_LENGTH])
+    text = replace_code(text[:MAX_INPUT_LENGTH], read=options.code)
     if dictionary is not None:
         text, protected = _protect(text)
         text = _restore(dictionary.apply(text, limit=MAX_EXPANDED_LENGTH), protected)
-    text = replace_urls(text)
-    text = replace_spoilers(text)
+    text = replace_urls(text, read=options.url)
+    text = replace_spoilers(text, read=options.spoiler)
     text = replace_mentions(text, user_name=user_name, role_name=role_name, channel_name=channel_name)
-    text = replace_custom_emojis(text)
+    text = replace_custom_emojis(text, read=options.emoji)
     text = strip_markdown(text)
     if attachments:
         text = f"{text} {attachments}" if text.strip() else attachments

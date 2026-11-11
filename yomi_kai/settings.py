@@ -8,6 +8,10 @@
       "read_name": false,
       "queue_speedup": true,
       "read_bots": false,
+      "read_url": true,
+      "read_emoji": true,
+      "read_code": false,
+      "read_spoiler": false,
       "ignored_users": ["<user_id>"],
       "ignored_roles": ["<role_id>"],
       "autojoin": {"<voice_channel_id>": "<text_channel_id>"},
@@ -34,12 +38,15 @@ from pathlib import Path
 from typing import Any
 
 from .jsonfile import FailedLoads, read_json_object, write_json_atomic
+from .text import ReadOptions
 
 logger = logging.getLogger(__name__)
 
 # 読み上げないユーザー・ロールの登録数の上限（それぞれ）
 MAX_IGNORED = 25
 IGNORED_KEYS = ("ignored_users", "ignored_roles")
+# 読み上げの切り替え（y.read）: 対象の名前 -> 設定のキー
+READ_KEYS = {"url": "read_url", "emoji": "read_emoji", "code": "read_code", "spoiler": "read_spoiler"}
 # 自動接続するボイスチャンネルの登録数の上限
 MAX_AUTOJOIN = 5
 
@@ -74,6 +81,12 @@ class GuildSettings:
     queue_speedup: bool = True
     # ほかの Bot・Webhook の発言も読み上げるか（未設定なら読み上げない）
     read_bots: bool = False
+    # URL を「URL」と読むか（オフなら読まない）・サーバー絵文字の名前を読むか（オフなら読まない）
+    read_url: bool = True
+    read_emoji: bool = True
+    # コードブロック・ネタバレの中身を読むか（オフなら「コード省略」「ネタバレ」と読む）
+    read_code: bool = False
+    read_spoiler: bool = False
     # 読み上げないユーザー・ロールの ID
     ignored_users: frozenset[int] = frozenset()
     ignored_roles: frozenset[int] = frozenset()
@@ -82,6 +95,9 @@ class GuildSettings:
 
     def user(self, user_id: int) -> UserSettings:
         return self.users.get(user_id) or UserSettings()
+
+    def read_options(self) -> ReadOptions:
+        return ReadOptions(url=self.read_url, emoji=self.read_emoji, code=self.read_code, spoiler=self.read_spoiler)
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> GuildSettings:
@@ -93,6 +109,10 @@ class GuildSettings:
         read_name = _flag(data, "read_name", False)
         queue_speedup = _flag(data, "queue_speedup", True)
         read_bots = _flag(data, "read_bots", False)
+        read_url = _flag(data, "read_url", True)
+        read_emoji = _flag(data, "read_emoji", True)
+        read_code = _flag(data, "read_code", False)
+        read_spoiler = _flag(data, "read_spoiler", False)
         ignored_users = frozenset(_id_list(data, "ignored_users"))
         ignored_roles = frozenset(_id_list(data, "ignored_roles"))
         autojoin = _id_map(data, "autojoin")
@@ -128,6 +148,10 @@ class GuildSettings:
             read_name=read_name,
             queue_speedup=queue_speedup,
             read_bots=read_bots,
+            read_url=read_url,
+            read_emoji=read_emoji,
+            read_code=read_code,
+            read_spoiler=read_spoiler,
             ignored_users=ignored_users,
             ignored_roles=ignored_roles,
             autojoin=autojoin,
