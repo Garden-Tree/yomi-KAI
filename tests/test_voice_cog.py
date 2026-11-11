@@ -35,7 +35,7 @@ class FakeEngine:
     def speakers(self):
         return [Speaker("ずんだもん", "fake")]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         self.calls.append(text)
         return b"wav"
 

@@ -14,6 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
+from ..plans import PlanManager
 from ..text import chunk_lines, gen_sd_text
 from ..tts import Speaker, TTSEngine
 from .common import EMBED_COLOR, handle_command_error, invalid_command_notice, reply
@@ -70,10 +71,13 @@ class SuddenDeathCog(commands.Cog):
 
 
 class MiscCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, engine: TTSEngine) -> None:
+    def __init__(
+        self, bot: commands.Bot, config: Config, engine: TTSEngine, *, plans: PlanManager | None = None
+    ) -> None:
         self.bot = bot
         self.config = config
         self.engine = engine
+        self.plans = plans if plans is not None else PlanManager(config, engine)
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError) -> None:
         # 引数が多すぎる（例: y.credit a）
@@ -85,6 +89,8 @@ class MiscCog(commands.Cog):
         ignore_extra=False,
     )
     async def credit(self, ctx: commands.Context) -> None:
-        for chunk in chunk_lines(credit_lines(self.engine.speakers(), self.config.use_google_tts)):
+        # サーバーではそのサーバーで使える話者、DM ではフリーで使える話者
+        engine = self.plans.engine_for(ctx.guild.id if ctx.guild is not None else None)
+        for chunk in chunk_lines(credit_lines(engine.speakers(), self.config.use_google_tts)):
             await reply(ctx, chunk)
         logger.info("creditを表示")

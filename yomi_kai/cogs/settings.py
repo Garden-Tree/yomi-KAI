@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import unicodedata
 from typing import Literal
 
 import discord
@@ -16,15 +17,34 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..config import Config
-from ..settings import DEFAULT_SPEED, SPEED_MAX, SPEED_MIN, SettingsStore
+from ..plans import PlanManager
+from ..settings import (
+    DEFAULT_SPEED,
+    PITCH_MAX,
+    PITCH_MIN,
+    READ_KEYS,
+    SPEED_MAX,
+    SPEED_MIN,
+    GuildSettings,
+    SettingsStore,
+)
 from ..text import chunk_lines
 from ..tts import TTSEngine, find_speakers
 from ..ui import MAX_OPTIONS, DropdownView
-from .common import SAVE_FAILED_NOTICE, guild_only_check, handle_command_error, invalid_command_notice, reply
+from .common import (
+    MANAGE_GUILD_NOTICE,
+    SAVE_FAILED_NOTICE,
+    guild_only_check,
+    handle_command_error,
+    invalid_command_notice,
+    reply,
+    reply_invalid,
+)
 
 logger = logging.getLogger(__name__)
 
 SPEED_INVALID_NOTICE = "速度は0.5〜2.0の数値で指定してください"
+PITCH_INVALID_NOTICE = f"声の高さは{PITCH_MIN}〜+{PITCH_MAX}の整数で指定してください（0 が標準）"
 # 話者名が曖昧なときに表示する候補の数
 MAX_CANDIDATES = 10
 
@@ -45,13 +65,59 @@ def parse_speed(raw: str) -> float | None:
     return speed
 
 
+# y.read の対象: 名前 -> (表示名, オンのときの読み方, オフのときの読み方)
+READ_TARGETS = {
+    "url": ("URL", "「URL」と読む", "読まない"),
+    "emoji": ("サーバー絵文字", "名前を読む", "読まない"),
+    "code": ("コードブロック", "中身を読む", "「コード省略」と読む"),
+    "spoiler": ("ネタバレ", "中身を読む", "「ネタバレ」と読む"),
+}
+
+
+def read_state_line(target: str, enabled: bool) -> str:
+    label, on, off = READ_TARGETS[target]
+    return f"{label}: {on if enabled else off}（{'on' if enabled else 'off'}）"
+
+
+def read_state_lines(settings: GuildSettings) -> list[str]:
+    return [read_state_line(target, getattr(settings, key)) for target, key in READ_KEYS.items()]
+
+
+def format_pitch(level: int) -> str:
+    """3 → "+3", 0 → "0（標準）", -2 → "-2"。"""
+    if level == 0:
+        return "0（標準）"
+    return f"{level:+d}"
+
+
+def parse_pitch(raw: str) -> int | None:
+    """-10〜+10 の整数（全角数字・全角の符号も可）なら int、それ以外は None。"""
+    text = unicodedata.normalize("NFKC", raw).strip().replace("−", "-")
+    try:
+        level = int(text)
+    except ValueError:
+        return None
+    if not PITCH_MIN <= level <= PITCH_MAX:
+        return None
+    return level
+
+
 class SettingsCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, config: Config, engine: TTSEngine, settings: SettingsStore) -> None:
+    def __init__(
+        self,
+        bot: commands.Bot,
+        config: Config,
+        engine: TTSEngine,
+        settings: SettingsStore,
+        *,
+        plans: PlanManager | None = None,
+    ) -> None:
         self.bot = bot
         self.config = config
         self.engine = engine
         self.settings = settings
-        self.available_speakers = frozenset(s.name for s in engine.speakers())
+        # サーバーで使える話者はプランで決まる（省略時はすべてのサーバーで engine の話者）
+        self.plans = plans if plans is not None else PlanManager(config, engine)
 
     async def cog_check(self, ctx: commands.Context) -> bool:
         return guild_only_check(ctx)
@@ -60,6 +126,8 @@ class SettingsCog(commands.Cog):
         # 引数の数・値が不正（例: y.speed 1 2、y.announce maybe）、設定ファイルが壊れている・書き込めない、など
         if ctx.command is not None and ctx.command.qualified_name == "speed":
             invalid_notice = SPEED_INVALID_NOTICE
+        elif ctx.command is not None and ctx.command.qualified_name == "pitch":
+            invalid_notice = PITCH_INVALID_NOTICE
         else:
             invalid_notice = invalid_command_notice(self.config.prefix)
         await handle_command_error(ctx, error, invalid_notice=invalid_notice)
@@ -97,8 +165,9 @@ class SettingsCog(commands.Cog):
 
         settings = await self.settings.aget(guild_id)
         saved = settings.user(ctx.author.id).speaker
-        current = saved if saved in self.available_speakers else "未設定（サーバー設定に従う）"
-        speakers = self.engine.speakers()
+        engine, available = self.plans.speakers_for(guild_id)
+        current = saved if saved in available else "未設定（サーバー設定に従う）"
+        speakers = engine.speakers()
         view = DropdownView(speakers, f"あなたの話者: {current}", select_user_speaker)
         message = "自分の話者を選んでください"
         if len(speakers) > MAX_OPTIONS:
@@ -110,13 +179,13 @@ class SettingsCog(commands.Cog):
         await reply(ctx, message, view=view)
 
     async def _send_speaker_list(self, ctx: commands.Context) -> None:
-        names = [s.name for s in self.engine.speakers()]
+        names = [s.name for s in self.plans.engine_for(ctx.guild.id).speakers()]
         lines = [f"使える話者（{len(names)}件）:", *names]
         for chunk in chunk_lines(lines):
             await reply(ctx, chunk, private=True)
 
     async def _set_speaker_by_name(self, ctx: commands.Context, query: str) -> None:
-        names = [s.name for s in self.engine.speakers()]
+        names = [s.name for s in self.plans.engine_for(ctx.guild.id).speakers()]
         found = find_speakers(query, names)
         if not found:
             await reply(
@@ -211,3 +280,89 @@ class SettingsCog(commands.Cog):
         await asyncio.to_thread(self.settings.set_user_speed, guild_id, user.id, speed)
         await reply(ctx, f"{user.display_name}さんの読み上げ速度を{format_speed(speed)}倍にしました", private=True)
         logger.info("%sさんの読み上げ速度を%s倍に変更しました (guild=%s)", user, speed, guild_id)
+
+    @commands.hybrid_command(
+        name="pitch", description="自分の声の高さを設定します（-10〜+10、0 が標準）", ignore_extra=False
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(value="-10〜+10 の整数、または reset（省略すると現在の高さを表示）")
+    async def pitch(self, ctx: commands.Context, value: str | None = None) -> None:
+        guild_id = ctx.guild.id
+        user = ctx.author
+
+        if value is None:
+            saved = (await self.settings.aget(guild_id)).user(user.id).pitch
+            await reply(ctx, f"現在の声の高さは{format_pitch(saved or 0)}です", private=True)
+            return
+        if value == "reset":
+            await asyncio.to_thread(self.settings.clear_user_pitch, guild_id, user.id)
+            await reply(ctx, "声の高さの個人設定を解除しました", private=True)
+            logger.info("%sさんの声の高さの個人設定を解除しました (guild=%s)", user, guild_id)
+            return
+
+        level = parse_pitch(value)
+        if level is None:
+            await reply(ctx, PITCH_INVALID_NOTICE, private=True)
+            return
+        await asyncio.to_thread(self.settings.set_user_pitch, guild_id, user.id, level)
+        await reply(ctx, f"{user.display_name}さんの声の高さを{format_pitch(level)}にしました", private=True)
+        logger.info("%sさんの声の高さを%sに変更しました (guild=%s)", user, level, guild_id)
+
+    # --- 読み上げの切り替え（y.read） ---
+    @commands.hybrid_group(
+        name="read", invoke_without_command=True, description="URL・絵文字・コード・ネタバレの読み方を設定します"
+    )
+    @app_commands.guild_only()
+    async def read_group(self, ctx: commands.Context, *args: str) -> None:
+        # サブコマンドなし（プレフィックスのみ）は現在の設定を表示。一致しないサブコマンドは案内
+        if args:
+            await reply_invalid(ctx, self.config.prefix)
+            return
+        await self._send_read_settings(ctx)
+
+    async def _send_read_settings(self, ctx: commands.Context) -> None:
+        settings = await self.settings.aget(ctx.guild.id)
+        await reply(ctx, "\n".join(["読み上げの設定（サーバー全体）:", *read_state_lines(settings)]))
+
+    @read_group.command(
+        name="list", description="URL・絵文字・コード・ネタバレの読み方を表示します", ignore_extra=False
+    )
+    async def read_list(self, ctx: commands.Context) -> None:
+        await self._send_read_settings(ctx)
+
+    async def _read_toggle(self, ctx: commands.Context, target: str, state: str | None) -> None:
+        guild_id = ctx.guild.id
+        key = READ_KEYS[target]
+        if state is None:
+            enabled = getattr(await self.settings.aget(guild_id), key)
+            await reply(ctx, read_state_line(target, enabled))
+            return
+        # 表示は誰でもできる。変更は「サーバー管理」の権限が必要
+        permissions = getattr(ctx.author, "guild_permissions", None)
+        if permissions is None or not permissions.manage_guild:
+            await reply(ctx, MANAGE_GUILD_NOTICE, private=True)
+            return
+        enabled = state == "on"
+        await asyncio.to_thread(self.settings.set_flag, guild_id, key, enabled)
+        await reply(ctx, f"{read_state_line(target, enabled)}にしました")
+        logger.info("読み上げの設定 %s を%sにしました (guild=%s)", key, state, guild_id)
+
+    @read_group.command(name="url", description="URL を「URL」と読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で「URL」と読む、off で読まない（省略すると現在の設定を表示）")
+    async def read_url(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "url", state)
+
+    @read_group.command(name="emoji", description="サーバー絵文字の名前を読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で名前を読む、off で読まない（省略すると現在の設定を表示）")
+    async def read_emoji(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "emoji", state)
+
+    @read_group.command(name="code", description="コードブロックの中身を読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で中身を読む、off で「コード省略」と読む（省略すると現在の設定を表示）")
+    async def read_code(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "code", state)
+
+    @read_group.command(name="spoiler", description="ネタバレ（||...||）の中身を読むか設定します", ignore_extra=False)
+    @app_commands.describe(state="on で中身を読む、off で「ネタバレ」と読む（省略すると現在の設定を表示）")
+    async def read_spoiler(self, ctx: commands.Context, state: Literal["on", "off"] | None = None) -> None:
+        await self._read_toggle(ctx, "spoiler", state)

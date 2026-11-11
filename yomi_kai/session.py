@@ -180,6 +180,7 @@ class _Message:
     speed: float
     epoch: int
     speedup: bool = False  # 混雑時の早読みの対象か
+    pitch: float = 0.0  # 声の高さ（TTSEngine の pitch）
     # メッセージを受け取った時刻（LatencyStats.clock）。最初のかたまりの再生を始めたら None にする
     received_at: float | None = None
     next_chunk: int = 0  # 次に合成を始めるかたまりの位置
@@ -324,6 +325,7 @@ class GuildSession:
         *,
         speedup: bool = False,
         received_at: float | None = None,
+        pitch: float = 0.0,
     ) -> bool:
         """読み上げキューに追加する（合成用のかたまりに分ける）。未接続なら何もせず False。AFKタイマーを張り直す。
 
@@ -333,7 +335,9 @@ class GuildSession:
         if not self.is_connected:
             return False
         chunks = split_for_synthesis(text) or [text]
-        self._messages.append(_Message(chunks, speaker, speed, self._epoch, speedup, received_at=received_at))
+        self._messages.append(
+            _Message(chunks, speaker, speed, self._epoch, speedup, pitch=pitch, received_at=received_at)
+        )
         self._wakeup.set()
         self._reset_afk_timer()
         return True
@@ -381,8 +385,8 @@ class GuildSession:
     def _is_live(self, message: _Message) -> bool:
         return not message.skipped and message.epoch == self._epoch
 
-    async def _synthesize(self, text: str, speaker: str, speed: float) -> bytes:
-        return await synthesize_async(self.engine, text, speaker, speed)
+    async def _synthesize(self, text: str, speaker: str, speed: float, pitch: float = 0.0) -> bytes:
+        return await synthesize_async(self.engine, text, speaker, speed, pitch)
 
     def _fill_pipeline(self) -> None:
         """再生前のかたまりが prefetch_chunks 個になるまで、次のかたまりの合成を始める（メッセージをまたぐ）。"""
@@ -396,7 +400,7 @@ class GuildSession:
                 message.speed = backlog_speed(message.speed, self.pending)
             text = message.chunks[message.next_chunk]
             message.next_chunk += 1
-            task = asyncio.create_task(self._synthesize(text, message.speaker, message.speed))
+            task = asyncio.create_task(self._synthesize(text, message.speaker, message.speed, message.pitch))
             task.add_done_callback(_consume_result)
             self._pipeline.append(_Job(message, task))
 
