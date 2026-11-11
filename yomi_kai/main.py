@@ -17,7 +17,7 @@ from discord.ext import commands
 from .blocklist import CHECK_INTERVAL, GuildBlocklist
 from .cogs.common import original_error
 from .config import Config, ConfigError, load_config
-from .dictionary import DictionaryStore
+from .dictionary import DictionaryStore, UserDictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
 from .plans import CHECK_INTERVAL as PREMIUM_CHECK_INTERVAL
 from .plans import PlanManager
@@ -94,6 +94,7 @@ class YomiBot(commands.Bot):
         settings: SettingsStore,
         usage: UsageStore | None = None,
         plans: PlanManager | None = None,
+        user_store: UserDictionaryStore | None = None,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -108,6 +109,8 @@ class YomiBot(commands.Bot):
         self.config = config
         self.engine = engine
         self.store = store
+        # 個人辞書（既定はサーバー辞書のディレクトリの users/）
+        self.user_store = user_store if user_store is not None else UserDictionaryStore(store.directory / "users")
         self.settings = settings
         # サーバーごとの上限と使える話者（engine はフリーで使える話者に絞ったエンジン）
         self.plans = plans if plans is not None else PlanManager(config, engine)
@@ -284,16 +287,19 @@ class YomiBot(commands.Bot):
                 usage=self.usage,
                 blocklist=self.blocklist,
                 plans=self.plans,
+                user_store=self.user_store,
             )
         )
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings, plans=self.plans))
-        await self.add_cog(DictionaryCog(self, self.config, self.store, plans=self.plans))
+        await self.add_cog(
+            DictionaryCog(self, self.config, self.store, plans=self.plans, user_store=self.user_store)
+        )
         await self.add_cog(MiscCog(self, self.config, self.engine, plans=self.plans))
         if self.config.enable_sudden_death:
             # 読み上げと関係ない機能なので、公開版では ENABLE_SUDDEN_DEATH = False で外せる
             await self.add_cog(SuddenDeathCog(self, self.config))
         await self.add_cog(AdminCog(self, self.config, self.settings))
-        await self.add_cog(PlanCog(self, self.config, self.plans, self.store))
+        await self.add_cog(PlanCog(self, self.config, self.plans, self.store, self.user_store))
         await self.sync_app_commands()
 
     async def sync_app_commands(self) -> None:

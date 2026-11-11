@@ -193,6 +193,7 @@ def build_read_text(
     text: str,
     dictionary: WordDictionary | None = None,
     *,
+    user_dictionary: WordDictionary | None = None,
     user_name: NameResolver | None = None,
     role_name: NameResolver | None = None,
     channel_name: NameResolver | None = None,
@@ -202,7 +203,8 @@ def build_read_text(
 ) -> str:
     """メッセージ本文を読み上げ用に整形する。
 
-    処理順: コード → 辞書置換 → URL → ネタバレ → メンション → サーバー絵文字 → マークダウン
+    処理順: コード → 辞書置換（個人辞書 ``user_dictionary`` → サーバー辞書）→ URL → ネタバレ → メンション
+    → サーバー絵文字 → マークダウン
     → 添付ファイルの説明（``attachments``、:func:`describe_attachments` の結果）を末尾に追加 → 文字数制限。
     コードを最初に処理するのは、コード内の文字列が辞書や URL として読まれないようにするため。
     辞書置換のあいだ、メンション・サーバー絵文字（``<@123>`` など）は辞書で壊れないように守っておく。
@@ -211,9 +213,13 @@ def build_read_text(
     ``options`` でサーバーごとの URL・サーバー絵文字・コードブロック・ネタバレの読み方を切り替える。
     """
     text = replace_code(text[:MAX_INPUT_LENGTH], read=options.code)
-    if dictionary is not None:
+    if dictionary is not None or user_dictionary is not None:
         text, protected = _protect(text)
-        text = _restore(dictionary.apply(text, limit=MAX_EXPANDED_LENGTH), protected)
+        # 個人辞書（発言者の辞書）を先に、サーバー辞書をあとに当てる
+        for words in (user_dictionary, dictionary):
+            if words is not None:
+                text = words.apply(text, limit=MAX_EXPANDED_LENGTH)
+        text = _restore(text, protected)
     text = replace_urls(text, read=options.url)
     text = replace_spoilers(text, read=options.spoiler)
     text = replace_mentions(text, user_name=user_name, role_name=role_name, channel_name=channel_name)

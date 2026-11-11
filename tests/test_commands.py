@@ -17,13 +17,14 @@ from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
 GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
-GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots", "plan", "pitch", "read"}
+GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots", "plan", "pitch", "read", "mydict"}
 TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit", "status"}
 # 「サーバー管理」の権限が必要なコマンド
 ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots", "dict import"}
 # サブコマンド（プレフィックスでの名前）
 SUBCOMMANDS = {"dict add", "dict del", "dict list", "dict help", "dict export", "dict import"}
 SUBCOMMANDS |= {"ignore add", "ignore del", "ignore list", "autojoin add", "autojoin del", "autojoin list"}
+SUBCOMMANDS |= {"mydict add", "mydict del", "mydict list"}
 SUBCOMMANDS |= {"read list", "read url", "read emoji", "read code", "read spoiler"}
 
 

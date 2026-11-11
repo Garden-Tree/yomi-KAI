@@ -18,7 +18,7 @@ from discord.ext import commands
 
 from ..blocklist import GuildBlocklist
 from ..config import Config
-from ..dictionary import DictionaryStore
+from ..dictionary import DictionaryStore, UserDictionaryStore
 from ..plans import PlanManager
 from ..session import AFK_NOTICE, GuildSession, LatencyStats, SourceFactory, SynthesisStats
 from ..settings import (
@@ -74,11 +74,14 @@ class VoiceCog(commands.Cog):
         usage: UsageStore | None = None,
         blocklist: GuildBlocklist | None = None,
         plans: PlanManager | None = None,
+        user_store: UserDictionaryStore | None = None,
     ) -> None:
         self.bot = bot
         self.config = config
         self.engine = engine
         self.store = store
+        # 個人辞書（None なら使わない）
+        self.user_store = user_store
         self.settings = settings
         # 使用量の計測（None なら記録しない）
         self.usage = usage
@@ -179,8 +182,8 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(
-            name=f"{prefix}dict",
-            value=f"辞書に関する操作です。詳しくは`{prefix}dict help`を参照してください。",
+            name=f"{prefix}dict / {prefix}mydict",
+            value=f"サーバーの辞書／自分の発言だけに使う個人辞書です。詳しくは`{prefix}dict help`を参照してください。",
             inline=False,
         )
         help_embed.add_field(
@@ -294,6 +297,8 @@ class VoiceCog(commands.Cog):
 
         # 辞書を先読みしておき、読み上げ時にファイルI/Oが発生しないようにする
         await self.store.aget(guild.id)
+        if self.user_store is not None:
+            await self.user_store.aget(guild.id, 0)
         return True
 
     async def _leave(self, guild: discord.Guild, notice: str | None = None, *, auto: bool = False) -> None:
@@ -413,10 +418,14 @@ class VoiceCog(commands.Cog):
             return
 
         dictionary = await self.store.aget(guild.id)
+        user_dictionary = None
+        if self.user_store is not None:
+            user_dictionary = await self.user_store.aget(guild.id, message.author.id)
         limits = self.plans.limits_for(guild.id)
         read_msg = build_read_text(
             message.content,
             dictionary,
+            user_dictionary=user_dictionary,
             user_name=lambda i: m.display_name if (m := guild.get_member(i)) else None,
             role_name=lambda i: r.name if (r := guild.get_role(i)) else None,
             channel_name=lambda i: c.name if (c := guild.get_channel(i)) else None,
@@ -542,7 +551,7 @@ class VoiceCog(commands.Cog):
         self._auto_disconnected_at.pop(guild.id, None)
         self.latency.forget(guild.id)
         # 設定・辞書のキャッシュも捨てる（evict を持つストアだけ）
-        for store in (self.settings, self.store):
+        for store in (self.settings, self.store, self.user_store):
             evict = getattr(store, "evict", None)
             if evict is None:
                 continue

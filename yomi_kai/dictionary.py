@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 
 from .jsonfile import FailedLoads, read_json_object, write_json_atomic
-from .text import WordDictionary, compile_dictionary
+from .text import EMPTY_DICTIONARY, WordDictionary, compile_dictionary
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,10 @@ class DictionaryStore:
         # 読み込みに失敗したサーバー（しばらくは読み直さず空の辞書を返す）
         self._failed = failed_loads if failed_loads is not None else FailedLoads()
         self._lock = threading.Lock()
+
+    @property
+    def directory(self) -> Path:
+        return self._dir
 
     def path_for(self, guild_id: int) -> Path:
         return self._dir / f"{guild_id}.json"
@@ -176,4 +180,122 @@ class DictionaryStore:
             del words[word]
             write_json_atomic(self.path_for(guild_id), words)
             self._replace_cache(guild_id, words)
+            return True
+
+
+class UserDictionaryStore:
+    """個人辞書 ``dict/users/{guild_id}.json``（``{"<user_id>": {"単語": "読み"}}``）の読み書き。
+
+    サーバーごとに1ファイルで、その人の発言にだけ（サーバー辞書より先に）使う。
+    キャッシュ・壊れたファイルの扱い・アトミックな書き込みは :class:`DictionaryStore` と同じ。
+    同期メソッドはイベントループから ``asyncio.to_thread`` 経由で呼ぶこと（``aget`` はキャッシュがあれば I/O なし）。
+    """
+
+    def __init__(self, directory: str | Path = "dict/users", *, failed_loads: FailedLoads | None = None) -> None:
+        self._dir = Path(directory)
+        # guild_id -> user_id -> コンパイル済み辞書（登録のないユーザーは入れない）
+        self._cache: dict[int, dict[int, WordDictionary]] = {}
+        self._failed = failed_loads if failed_loads is not None else FailedLoads()
+        self._lock = threading.Lock()
+
+    def path_for(self, guild_id: int) -> Path:
+        return self._dir / f"{guild_id}.json"
+
+    def _read_all(self, guild_id: int) -> dict[str, dict[str, str]]:
+        """ファイルから全員の辞書を読む。ファイルが無ければ空。壊れていれば例外を送出する。"""
+        path = self.path_for(guild_id)
+        data = read_json_object(path)
+        for user, words in data.items():
+            if not (isinstance(user, str) and user.isascii() and user.isdigit()):
+                raise ValueError(f"{path} のキー {user!r} がユーザーIDではありません")
+            if not isinstance(words, dict):
+                raise ValueError(f"{path} の {user} の辞書がオブジェクトではありません")
+            for word, reading in words.items():
+                if not isinstance(reading, str):
+                    raise ValueError(f"{path} の {user} の「{word}」の読みが文字列ではありません")
+        return data
+
+    @staticmethod
+    def _compile_all(data: dict[str, dict[str, str]]) -> dict[int, WordDictionary]:
+        return {int(user): compile_dictionary(words) for user, words in data.items() if words}
+
+    def _guild(self, guild_id: int) -> dict[int, WordDictionary]:
+        cached = self._cache.get(guild_id)
+        if cached is not None:
+            return cached
+        if self._failed.is_waiting(guild_id):
+            return {}
+        with self._lock:
+            cached = self._cache.get(guild_id)
+            if cached is not None:
+                return cached
+            if self._failed.is_waiting(guild_id):
+                return {}
+            path = self.path_for(guild_id)
+            try:
+                compiled = self._compile_all(self._read_all(guild_id))
+            except (OSError, ValueError):
+                if self._failed.record(guild_id, path):
+                    logger.exception("個人辞書ファイルの読み込みに失敗しました: %s", path)
+                else:
+                    logger.debug("個人辞書ファイルは引き続き読み込めません: %s", path)
+                return {}
+            self._failed.clear(guild_id)
+            self._cache[guild_id] = compiled
+            return compiled
+
+    def get(self, guild_id: int, user_id: int) -> WordDictionary:
+        """その人のコンパイル済み辞書（登録がなければ空）。初回のみファイルを読む。"""
+        return self._guild(guild_id).get(user_id, EMPTY_DICTIONARY)
+
+    async def aget(self, guild_id: int, user_id: int) -> WordDictionary:
+        cached = self._cache.get(guild_id)
+        if cached is not None:
+            return cached.get(user_id, EMPTY_DICTIONARY)
+        if self._failed.is_waiting(guild_id):
+            return EMPTY_DICTIONARY
+        return await asyncio.to_thread(self.get, guild_id, user_id)
+
+    def words(self, guild_id: int, user_id: int) -> dict[str, str]:
+        return dict(self.get(guild_id, user_id).words)
+
+    async def awords(self, guild_id: int, user_id: int) -> dict[str, str]:
+        return dict((await self.aget(guild_id, user_id)).words)
+
+    def evict(self, guild_id: int) -> None:
+        with self._lock:
+            self._cache.pop(guild_id, None)
+            self._failed.clear(guild_id)
+
+    def _write(self, guild_id: int, data: dict[str, dict[str, str]]) -> None:
+        """書き込んでキャッシュを差し替える（ロックを持った状態で呼ぶ）。"""
+        data = {user: words for user, words in data.items() if words}
+        write_json_atomic(self.path_for(guild_id), data)
+        self._cache[guild_id] = self._compile_all(data)
+        self._failed.clear(guild_id)
+
+    def add(self, guild_id: int, user_id: int, word: str, reading: str, *, max_entries: int = 0) -> bool:
+        """単語を登録する（登録済みなら読みを更新）。規則はサーバー辞書と同じ（:func:`validate_entry`）。
+
+        ``max_entries`` が 1 以上で、未登録の単語を追加するとその人の件数がそれを超える場合は False。0 なら無制限。
+        """
+        validate_entry(word, reading)
+        with self._lock:
+            data = self._read_all(guild_id)
+            words = data.setdefault(str(user_id), {})
+            if max_entries > 0 and word not in words and len(words) >= max_entries:
+                return False
+            words[word] = reading
+            self._write(guild_id, data)
+            return True
+
+    def remove(self, guild_id: int, user_id: int, word: str) -> bool:
+        """単語を削除する。未登録なら False（ファイルは変更しない）。"""
+        with self._lock:
+            data = self._read_all(guild_id)
+            words = data.get(str(user_id), {})
+            if word not in words:
+                return False
+            del words[word]
+            self._write(guild_id, data)
             return True
