@@ -28,7 +28,7 @@ class RecordingEngine:
     def speakers(self):
         return [Speaker(n, "fake") for n in self.names]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         self.calls.append((text, speaker, speed))
         return b"wav"
 
@@ -131,4 +131,4 @@ def test_voice_commands_only_see_allowed_speakers(tmp_path):
     assert listing.sent == ["使える話者（2件）:\nずんだもん\n春日部つむぎ"]
     assert "見つかりません" in denied.sent[0]
     assert allowed.sent == ["aliceさんの話者をずんだもんにしました"]
-    assert cog.available_speakers == {"ずんだもん", "春日部つむぎ"}
+    assert cog.plans.speakers_for(1)[1] == {"ずんだもん", "春日部つむぎ"}

@@ -26,7 +26,7 @@ class FakeEngine:
     def speakers(self):
         return [Speaker(ZUNDA, "fake"), Speaker(TSUMUGI, "fake")]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         self.calls.append((text, speaker, speed))
         time.sleep(self.delays.get(text, 0))
         if text in self.fail:
@@ -340,7 +340,7 @@ class CountingEngine(FakeEngine):
         self.max_active = 0
         self._guard = threading.Lock()
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         with self._guard:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
@@ -653,7 +653,7 @@ class SinglePoolAsyncEngine(FakeEngine):
         super().__init__(delays)
         self._busy = None
 
-    async def synthesize_async(self, text, speaker, speed=1.0):
+    async def synthesize_async(self, text, speaker, speed=1.0, pitch=0.0):
         if self._busy is None:
             self._busy = asyncio.Semaphore(1)
         async with self._busy:
@@ -661,7 +661,7 @@ class SinglePoolAsyncEngine(FakeEngine):
             await asyncio.sleep(self.delays.get(text, 0))
             return f"{speaker}:{text}".encode()
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         raise AssertionError("GuildSession は synthesize_async を使う")
 
 

@@ -8,11 +8,15 @@
       "read_name": false,
       "queue_speedup": true,
       "read_bots": false,
+      "read_url": true,
+      "read_emoji": true,
+      "read_code": false,
+      "read_spoiler": false,
       "ignored_users": ["<user_id>"],
       "ignored_roles": ["<role_id>"],
       "autojoin": {"<voice_channel_id>": "<text_channel_id>"},
       "users": {
-        "<user_id>": {"speaker": "個人の話者", "speed": 1.2}
+        "<user_id>": {"speaker": "個人の話者", "speed": 1.2, "pitch": 3}
       }
     }
 
@@ -34,12 +38,15 @@ from pathlib import Path
 from typing import Any
 
 from .jsonfile import FailedLoads, read_json_object, write_json_atomic
+from .text import ReadOptions
 
 logger = logging.getLogger(__name__)
 
 # 読み上げないユーザー・ロールの登録数の上限（それぞれ）
 MAX_IGNORED = 25
 IGNORED_KEYS = ("ignored_users", "ignored_roles")
+# 読み上げの切り替え（y.read）: 対象の名前 -> 設定のキー
+READ_KEYS = {"url": "read_url", "emoji": "read_emoji", "code": "read_code", "spoiler": "read_spoiler"}
 # 自動接続するボイスチャンネルの登録数の上限
 MAX_AUTOJOIN = 5
 
@@ -47,11 +54,19 @@ SPEED_MIN = 0.5
 SPEED_MAX = 2.0
 DEFAULT_SPEED = 1.0
 
+# 声の高さ（y.pitch）。利用者には -10〜+10 の整数で見せ、1段階あたり PITCH_STEP を
+# VOICEVOX の pitch_scale（対数の基本周波数に足す値）に足す。±10 で ±0.15（約 ±2.6 半音）
+PITCH_MIN = -10
+PITCH_MAX = 10
+PITCH_STEP = 0.015
+
 
 @dataclass(frozen=True)
 class UserSettings:
     speaker: str | None = None
     speed: float | None = None
+    # 声の高さ（PITCH_MIN〜PITCH_MAX の段階。None なら標準）
+    pitch: int | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,12 @@ class GuildSettings:
     queue_speedup: bool = True
     # ほかの Bot・Webhook の発言も読み上げるか（未設定なら読み上げない）
     read_bots: bool = False
+    # URL を「URL」と読むか（オフなら読まない）・サーバー絵文字の名前を読むか（オフなら読まない）
+    read_url: bool = True
+    read_emoji: bool = True
+    # コードブロック・ネタバレの中身を読むか（オフなら「コード省略」「ネタバレ」と読む）
+    read_code: bool = False
+    read_spoiler: bool = False
     # 読み上げないユーザー・ロールの ID
     ignored_users: frozenset[int] = frozenset()
     ignored_roles: frozenset[int] = frozenset()
@@ -74,6 +95,9 @@ class GuildSettings:
 
     def user(self, user_id: int) -> UserSettings:
         return self.users.get(user_id) or UserSettings()
+
+    def read_options(self) -> ReadOptions:
+        return ReadOptions(url=self.read_url, emoji=self.read_emoji, code=self.read_code, spoiler=self.read_spoiler)
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> GuildSettings:
@@ -85,6 +109,10 @@ class GuildSettings:
         read_name = _flag(data, "read_name", False)
         queue_speedup = _flag(data, "queue_speedup", True)
         read_bots = _flag(data, "read_bots", False)
+        read_url = _flag(data, "read_url", True)
+        read_emoji = _flag(data, "read_emoji", True)
+        read_code = _flag(data, "read_code", False)
+        read_spoiler = _flag(data, "read_spoiler", False)
         ignored_users = frozenset(_id_list(data, "ignored_users"))
         ignored_roles = frozenset(_id_list(data, "ignored_roles"))
         autojoin = _id_map(data, "autojoin")
@@ -105,7 +133,14 @@ class GuildSettings:
             speed = entry.get("speed")
             if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))):
                 raise ValueError(f"users[{key!r}].speed は数値で指定してください")
-            users[user_id] = UserSettings(user_speaker, None if speed is None else float(speed))
+            pitch = entry.get("pitch")
+            if pitch is not None and (isinstance(pitch, bool) or not isinstance(pitch, (int, float))):
+                raise ValueError(f"users[{key!r}].pitch は数値で指定してください")
+            users[user_id] = UserSettings(
+                user_speaker,
+                None if speed is None else float(speed),
+                None if pitch is None else _clamp_pitch(pitch),
+            )
         return cls(
             speaker=speaker,
             users=users,
@@ -113,10 +148,33 @@ class GuildSettings:
             read_name=read_name,
             queue_speedup=queue_speedup,
             read_bots=read_bots,
+            read_url=read_url,
+            read_emoji=read_emoji,
+            read_code=read_code,
+            read_spoiler=read_spoiler,
             ignored_users=ignored_users,
             ignored_roles=ignored_roles,
             autojoin=autojoin,
         )
+
+
+def _clamp_pitch(value: float) -> int:
+    """保存された高さを PITCH_MIN〜PITCH_MAX の整数にする（手で編集されたファイルなど）。"""
+    if not math.isfinite(value):
+        return 0
+    return int(min(max(round(value), PITCH_MIN), PITCH_MAX))
+
+
+def pitch_scale(level: int | None) -> float:
+    """声の高さの段階を TTSEngine の ``pitch``（VOICEVOX の pitch_scale と同じ単位）にする。"""
+    if not level:
+        return 0.0
+    return min(max(level, PITCH_MIN), PITCH_MAX) * PITCH_STEP
+
+
+def resolve_pitch(settings: GuildSettings, user_id: int) -> float:
+    """読み上げに使う声の高さ（TTSEngine の ``pitch``）。個人設定がなければ 0.0（標準）。"""
+    return pitch_scale(settings.user(user_id).pitch)
 
 
 def _snowflake(value: Any, where: str) -> int:
@@ -234,6 +292,10 @@ class SettingsStore:
         # 読み込みに失敗したサーバー（しばらくは読み直さず空の設定を返す）
         self._failed = failed_loads if failed_loads is not None else FailedLoads()
         self._lock = threading.Lock()
+
+    @property
+    def directory(self) -> Path:
+        return self._dir
 
     def path_for(self, guild_id: int) -> Path:
         return self._dir / f"{guild_id}.json"
@@ -433,3 +495,12 @@ class SettingsStore:
     def clear_user_speed(self, guild_id: int, user_id: int) -> bool:
         """個人の速度設定を消す。未設定なら False。"""
         return self._clear_user_field(guild_id, user_id, "speed")
+
+    def set_user_pitch(self, guild_id: int, user_id: int, level: int) -> None:
+        if not PITCH_MIN <= level <= PITCH_MAX:
+            raise ValueError(f"pitch は {PITCH_MIN}〜{PITCH_MAX} で指定してください")
+        self._set_user_field(guild_id, user_id, "pitch", int(level))
+
+    def clear_user_pitch(self, guild_id: int, user_id: int) -> bool:
+        """個人の声の高さの設定を消す。未設定なら False。"""
+        return self._clear_user_field(guild_id, user_id, "pitch")
