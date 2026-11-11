@@ -23,6 +23,8 @@ from .plans import CHECK_INTERVAL as PREMIUM_CHECK_INTERVAL
 from .plans import PlanManager
 from .rejoin import VoiceSessionRegistry
 from .settings import SettingsStore
+from .status import bot_version
+from .status_push import StatusPusher, build_payload, http_poster
 from .tts import TTSEngine
 from .usage import UsageStore
 
@@ -143,6 +145,20 @@ class YomiBot(commands.Bot):
         if config.alert_webhook_url:
             self.alerter = DisconnectAlerter(webhook_sender(config.alert_webhook_url), alert_after=config.alert_after)
             logger.info("切断通知を有効にしました (%s, %d秒)", mask_url(config.alert_webhook_url), config.alert_after)
+        self.status_pusher: StatusPusher | None = None
+        self._status_push_task: asyncio.Task[None] | None = None
+        if config.status_push_url and config.status_push_token:
+            self.status_pusher = StatusPusher(
+                http_poster(config.status_push_url, config.status_push_token),
+                self.status_payload,
+                self.is_gateway_alive,
+                interval=config.status_push_interval,
+            )
+            logger.info(
+                "稼働状況の送信を有効にしました (%s, %d秒ごと)",
+                mask_url(config.status_push_url),
+                config.status_push_interval,
+            )
 
     # --- 接続監視（yomi_kai.health） ---
     def is_gateway_alive(self) -> bool:
@@ -150,8 +166,16 @@ class YomiBot(commands.Bot):
             return False
         return self.is_ready() and not self.is_closed() and math.isfinite(self.latency)
 
+    def status_payload(self) -> dict:
+        """ステータスページに送る稼働状況（yomi_kai.status_push）。"""
+        latency = getattr(self.get_cog("VoiceCog"), "latency", None)
+        summary = latency.summary() if latency is not None else None
+        return build_payload(bot_version(), summary, len(self.voice_clients))
+
     def _start_monitoring(self) -> None:
         self._heartbeat_task = asyncio.create_task(heartbeat_loop(self.is_gateway_alive), name="yomi-kai-heartbeat")
+        if self.status_pusher is not None:
+            self._status_push_task = asyncio.create_task(self.status_pusher.run(), name="yomi-kai-status-push")
         if self.usage is not None:
             self._usage_task = asyncio.create_task(self.usage.run_flusher(), name="yomi-kai-usage")
         if self.alerter is not None:
@@ -173,6 +197,8 @@ class YomiBot(commands.Bot):
             self._heartbeat_task.cancel()
         if self._usage_task is not None:
             self._usage_task.cancel()
+        if self._status_push_task is not None:
+            self._status_push_task.cancel()
         if self._blocklist_task is not None:
             self._blocklist_task.cancel()
         if self._premium_task is not None:

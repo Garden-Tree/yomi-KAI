@@ -4,6 +4,7 @@
 DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 任意キーとして VOICEVOX_LOAD_ALL_MODELS（既定 False）、MAX_READ_LENGTH（既定 100、0 で無制限）、
 ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
+STATUS_PUSH_URL / STATUS_PUSH_TOKEN / STATUS_PUSH_INTERVAL（ステータスページへの稼働状況の送信、既定は送らない）、
 VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
 LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、RECORD_USAGE（使用量を記録するか、既定 False）、
 USAGE_DIR（使用量の保存先、既定 usage）、
@@ -43,6 +44,10 @@ class Config:
     max_read_length: int = 100
     alert_webhook_url: str | None = None
     alert_after: int = 300
+    # ステータスページへの稼働状況の送信（URL とトークンの両方があるときだけ有効。yomi_kai.status_push）
+    status_push_url: str | None = None
+    status_push_token: str | None = None
+    status_push_interval: int = 300
     voicevox_workers: int = 1
     # True のときだけ、読み上げた本文を DEBUG ログ（ファイル）に出す
     log_read_text: bool = False
@@ -74,7 +79,8 @@ class Config:
         return (
             f"Config(prefix={self.prefix!r}, afk_time={self.afk_time}, use_google_tts={self.use_google_tts}, "
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
-            f"alert_after={self.alert_after}, voicevox_workers={self.voicevox_workers}, "
+            f"alert_after={self.alert_after}, status_push={'on' if self.status_push_url else 'off'}, "
+            f"voicevox_workers={self.voicevox_workers}, "
             f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
             f"max_user_dict_entries={self.max_user_dict_entries}, premium_enabled={self.premium_enabled}, "
@@ -168,6 +174,13 @@ def load_config(path: str | Path = "config.ini") -> Config:
                 "config.ini の `ALERT_WEBHOOK_URL` は https:// で始まる Webhook の URL を指定してください。"
             )
         alert_after = _int(section, "ALERT_AFTER", 300, 30, None, "秒数（整数）")
+        status_push_url = (section.get("STATUS_PUSH_URL") or "").strip() or None
+        status_push_token = (section.get("STATUS_PUSH_TOKEN") or "").strip() or None
+        if status_push_url is not None and not status_push_url.startswith("https://"):
+            raise ConfigError("config.ini の `STATUS_PUSH_URL` は https:// で始まる URL を指定してください。")
+        if (status_push_url is None) != (status_push_token is None):
+            raise ConfigError("config.ini の `STATUS_PUSH_URL` と `STATUS_PUSH_TOKEN` は両方とも指定してください。")
+        status_push_interval = _int(section, "STATUS_PUSH_INTERVAL", 300, 60, None, "秒数（整数）")
         voicevox_workers = _int(section, "VOICEVOX_WORKERS", 1, 1, 8)
         log_read_text = _boolean(section, "LOG_READ_TEXT", False)
         record_usage = _boolean(section, "RECORD_USAGE", False)
@@ -201,6 +214,9 @@ def load_config(path: str | Path = "config.ini") -> Config:
         max_read_length=max_read_length,
         alert_webhook_url=alert_webhook_url,
         alert_after=alert_after,
+        status_push_url=status_push_url,
+        status_push_token=status_push_token,
+        status_push_interval=status_push_interval,
         voicevox_workers=voicevox_workers,
         log_read_text=log_read_text,
         record_usage=record_usage,

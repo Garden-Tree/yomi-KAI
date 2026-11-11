@@ -25,6 +25,12 @@ MAX_READ_LENGTH = 100
 ;True にすると、読み上げた本文をログファイル（log/）に記録します。既定 False（本文はログに残しません）
 ;ENABLE_SUDDEN_DEATH = True
 ;False にすると「突然の死」コマンド（y.sd・/sd）を登録せず、ヘルプにも表示しません（既定 True）
+;STATUS_PUSH_URL = https://example.com/api/heartbeat
+;STATUS_PUSH_TOKEN = YOUR_STATUS_PUSH_TOKEN
+;ステータスページに稼働状況（バージョン・読み上げの開始までの時間・接続数）を送る先と、その認証トークン。
+;両方を設定したときだけ送ります（既定は送りません）。詳しくは docs/hosting.md の「ステータスページ」を参照
+;STATUS_PUSH_INTERVAL = 300
+;送る間隔（秒、60以上）。既定は 300（5分）
 ;MAX_USER_DICT_ENTRIES = 0
 ;個人辞書（y.mydict）の1人あたりの登録数の上限。0 で無制限（既定）
 ;PREMIUM_ENABLED = False
