@@ -21,7 +21,14 @@ from ..config import Config
 from ..dictionary import DictionaryStore
 from ..plans import PlanManager
 from ..session import AFK_NOTICE, GuildSession, LatencyStats, SourceFactory, SynthesisStats
-from ..settings import SettingsStore, is_ignored, resolve_voice, server_speaker, should_read_author
+from ..settings import (
+    SettingsStore,
+    is_ignored,
+    resolve_pitch,
+    resolve_voice,
+    server_speaker,
+    should_read_author,
+)
 from ..status import bot_version, status_fields
 from ..text import (
     announce_text,
@@ -148,10 +155,10 @@ class VoiceCog(commands.Cog):
             inline=False,
         )
         help_embed.add_field(
-            name=f"{prefix}speed `倍率`",
+            name=f"{prefix}speed `倍率` / {prefix}pitch `高さ`",
             value=(
-                "自分の読み上げ速度を0.5〜2.0倍で設定します。"
-                f"`{prefix}speed`で現在の速度を表示、`{prefix}speed reset`で解除します。"
+                "自分の読み上げ速度（0.5〜2.0倍）／声の高さ（-10〜+10、0 が標準）を設定します。"
+                "引数なしで現在の値を表示、`reset`で解除します。"
             ),
             inline=False,
         )
@@ -428,7 +435,10 @@ class VoiceCog(commands.Cog):
         # 名前は本文の切り詰め後に付ける（MAX_READ_LENGTH は本文だけに適用）
         if settings.read_name and should_read_name(self._last_reader.get(guild.id), message.author.id, now):
             read_msg = with_name(read_msg, message.author.display_name)
-        if session.enqueue(read_msg, speaker, speed, speedup=settings.queue_speedup, received_at=received_at):
+        pitch = resolve_pitch(settings, message.author.id)
+        if session.enqueue(
+            read_msg, speaker, speed, speedup=settings.queue_speedup, received_at=received_at, pitch=pitch
+        ):
             self._last_reader[guild.id] = (message.author.id, now)
             if self.usage is not None:
                 self.usage.record(guild.id, message.author.id, len(read_msg))

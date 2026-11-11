@@ -28,7 +28,7 @@ class RecordingEngine:
     def speakers(self):
         return [Speaker(n, "fake") for n in self.names]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         self.calls.append((text, speaker, speed))
         return b"wav"
 

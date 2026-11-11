@@ -12,7 +12,7 @@
       "ignored_roles": ["<role_id>"],
       "autojoin": {"<voice_channel_id>": "<text_channel_id>"},
       "users": {
-        "<user_id>": {"speaker": "個人の話者", "speed": 1.2}
+        "<user_id>": {"speaker": "個人の話者", "speed": 1.2, "pitch": 3}
       }
     }
 
@@ -47,11 +47,19 @@ SPEED_MIN = 0.5
 SPEED_MAX = 2.0
 DEFAULT_SPEED = 1.0
 
+# 声の高さ（y.pitch）。利用者には -10〜+10 の整数で見せ、1段階あたり PITCH_STEP を
+# VOICEVOX の pitch_scale（対数の基本周波数に足す値）に足す。±10 で ±0.15（約 ±2.6 半音）
+PITCH_MIN = -10
+PITCH_MAX = 10
+PITCH_STEP = 0.015
+
 
 @dataclass(frozen=True)
 class UserSettings:
     speaker: str | None = None
     speed: float | None = None
+    # 声の高さ（PITCH_MIN〜PITCH_MAX の段階。None なら標準）
+    pitch: int | None = None
 
 
 @dataclass(frozen=True)
@@ -105,7 +113,14 @@ class GuildSettings:
             speed = entry.get("speed")
             if speed is not None and (isinstance(speed, bool) or not isinstance(speed, (int, float))):
                 raise ValueError(f"users[{key!r}].speed は数値で指定してください")
-            users[user_id] = UserSettings(user_speaker, None if speed is None else float(speed))
+            pitch = entry.get("pitch")
+            if pitch is not None and (isinstance(pitch, bool) or not isinstance(pitch, (int, float))):
+                raise ValueError(f"users[{key!r}].pitch は数値で指定してください")
+            users[user_id] = UserSettings(
+                user_speaker,
+                None if speed is None else float(speed),
+                None if pitch is None else _clamp_pitch(pitch),
+            )
         return cls(
             speaker=speaker,
             users=users,
@@ -117,6 +132,25 @@ class GuildSettings:
             ignored_roles=ignored_roles,
             autojoin=autojoin,
         )
+
+
+def _clamp_pitch(value: float) -> int:
+    """保存された高さを PITCH_MIN〜PITCH_MAX の整数にする（手で編集されたファイルなど）。"""
+    if not math.isfinite(value):
+        return 0
+    return int(min(max(round(value), PITCH_MIN), PITCH_MAX))
+
+
+def pitch_scale(level: int | None) -> float:
+    """声の高さの段階を TTSEngine の ``pitch``（VOICEVOX の pitch_scale と同じ単位）にする。"""
+    if not level:
+        return 0.0
+    return min(max(level, PITCH_MIN), PITCH_MAX) * PITCH_STEP
+
+
+def resolve_pitch(settings: GuildSettings, user_id: int) -> float:
+    """読み上げに使う声の高さ（TTSEngine の ``pitch``）。個人設定がなければ 0.0（標準）。"""
+    return pitch_scale(settings.user(user_id).pitch)
 
 
 def _snowflake(value: Any, where: str) -> int:
@@ -433,3 +467,12 @@ class SettingsStore:
     def clear_user_speed(self, guild_id: int, user_id: int) -> bool:
         """個人の速度設定を消す。未設定なら False。"""
         return self._clear_user_field(guild_id, user_id, "speed")
+
+    def set_user_pitch(self, guild_id: int, user_id: int, level: int) -> None:
+        if not PITCH_MIN <= level <= PITCH_MAX:
+            raise ValueError(f"pitch は {PITCH_MIN}〜{PITCH_MAX} で指定してください")
+        self._set_user_field(guild_id, user_id, "pitch", int(level))
+
+    def clear_user_pitch(self, guild_id: int, user_id: int) -> bool:
+        """個人の声の高さの設定を消す。未設定なら False。"""
+        return self._clear_user_field(guild_id, user_id, "pitch")

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import unicodedata
 from typing import Literal
 
 import discord
@@ -17,7 +18,7 @@ from discord.ext import commands
 
 from ..config import Config
 from ..plans import PlanManager
-from ..settings import DEFAULT_SPEED, SPEED_MAX, SPEED_MIN, SettingsStore
+from ..settings import DEFAULT_SPEED, PITCH_MAX, PITCH_MIN, SPEED_MAX, SPEED_MIN, SettingsStore
 from ..text import chunk_lines
 from ..tts import TTSEngine, find_speakers
 from ..ui import MAX_OPTIONS, DropdownView
@@ -26,6 +27,7 @@ from .common import SAVE_FAILED_NOTICE, guild_only_check, handle_command_error, 
 logger = logging.getLogger(__name__)
 
 SPEED_INVALID_NOTICE = "速度は0.5〜2.0の数値で指定してください"
+PITCH_INVALID_NOTICE = f"声の高さは{PITCH_MIN}〜+{PITCH_MAX}の整数で指定してください（0 が標準）"
 # 話者名が曖昧なときに表示する候補の数
 MAX_CANDIDATES = 10
 
@@ -44,6 +46,25 @@ def parse_speed(raw: str) -> float | None:
     if not math.isfinite(speed) or not SPEED_MIN <= speed <= SPEED_MAX:
         return None
     return speed
+
+
+def format_pitch(level: int) -> str:
+    """3 → "+3", 0 → "0（標準）", -2 → "-2"。"""
+    if level == 0:
+        return "0（標準）"
+    return f"{level:+d}"
+
+
+def parse_pitch(raw: str) -> int | None:
+    """-10〜+10 の整数（全角数字・全角の符号も可）なら int、それ以外は None。"""
+    text = unicodedata.normalize("NFKC", raw).strip().replace("−", "-")
+    try:
+        level = int(text)
+    except ValueError:
+        return None
+    if not PITCH_MIN <= level <= PITCH_MAX:
+        return None
+    return level
 
 
 class SettingsCog(commands.Cog):
@@ -70,6 +91,8 @@ class SettingsCog(commands.Cog):
         # 引数の数・値が不正（例: y.speed 1 2、y.announce maybe）、設定ファイルが壊れている・書き込めない、など
         if ctx.command is not None and ctx.command.qualified_name == "speed":
             invalid_notice = SPEED_INVALID_NOTICE
+        elif ctx.command is not None and ctx.command.qualified_name == "pitch":
+            invalid_notice = PITCH_INVALID_NOTICE
         else:
             invalid_notice = invalid_command_notice(self.config.prefix)
         await handle_command_error(ctx, error, invalid_notice=invalid_notice)
@@ -222,3 +245,30 @@ class SettingsCog(commands.Cog):
         await asyncio.to_thread(self.settings.set_user_speed, guild_id, user.id, speed)
         await reply(ctx, f"{user.display_name}さんの読み上げ速度を{format_speed(speed)}倍にしました", private=True)
         logger.info("%sさんの読み上げ速度を%s倍に変更しました (guild=%s)", user, speed, guild_id)
+
+    @commands.hybrid_command(
+        name="pitch", description="自分の声の高さを設定します（-10〜+10、0 が標準）", ignore_extra=False
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(value="-10〜+10 の整数、または reset（省略すると現在の高さを表示）")
+    async def pitch(self, ctx: commands.Context, value: str | None = None) -> None:
+        guild_id = ctx.guild.id
+        user = ctx.author
+
+        if value is None:
+            saved = (await self.settings.aget(guild_id)).user(user.id).pitch
+            await reply(ctx, f"現在の声の高さは{format_pitch(saved or 0)}です", private=True)
+            return
+        if value == "reset":
+            await asyncio.to_thread(self.settings.clear_user_pitch, guild_id, user.id)
+            await reply(ctx, "声の高さの個人設定を解除しました", private=True)
+            logger.info("%sさんの声の高さの個人設定を解除しました (guild=%s)", user, guild_id)
+            return
+
+        level = parse_pitch(value)
+        if level is None:
+            await reply(ctx, PITCH_INVALID_NOTICE, private=True)
+            return
+        await asyncio.to_thread(self.settings.set_user_pitch, guild_id, user.id, level)
+        await reply(ctx, f"{user.display_name}さんの声の高さを{format_pitch(level)}にしました", private=True)
+        logger.info("%sさんの声の高さを%sに変更しました (guild=%s)", user, level, guild_id)

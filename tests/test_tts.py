@@ -23,7 +23,7 @@ class RecordingEngine:
     def speakers(self):
         return [Speaker(n, "fake") for n in self.names]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         self.calls.append((text, speaker, speed))
         return b"wav"
 
@@ -272,7 +272,7 @@ class AsyncRecordingEngine(RecordingEngine):
         super().__init__(names)
         self.async_calls = []
 
-    async def synthesize_async(self, text, speaker, speed=1.0):
+    async def synthesize_async(self, text, speaker, speed=1.0, pitch=0.0):
         self.async_calls.append((text, speaker, speed))
         return b"async"
 
@@ -303,7 +303,7 @@ def test_sync_engine_runs_on_dedicated_synthesis_threads():
     threads = []
 
     class SyncEngine(RecordingEngine):
-        def synthesize(self, text, speaker, speed=1.0):
+        def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
             threads.append(threading.current_thread().name)
             return super().synthesize(text, speaker, speed)
 

@@ -17,7 +17,7 @@ from yomi_kai.settings import SettingsStore
 from yomi_kai.tts import Speaker
 
 GUILD_ONLY = {"c", "dc", "s", "voice", "speed", "announce", "dict"}
-GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots", "plan"}
+GUILD_ONLY |= {"readname", "ignore", "autojoin", "speedup", "readbots", "plan", "pitch"}
 TOP_LEVEL = GUILD_ONLY | {"help", "sd", "credit", "status"}
 # 「サーバー管理」の権限が必要なコマンド
 ADMIN_ONLY = {"ignore add", "ignore del", "autojoin add", "autojoin del", "readbots", "dict import"}
@@ -34,7 +34,7 @@ class StubEngine:
     def speakers(self):
         return [Speaker("ずんだもん", "stub"), Speaker("春日部つむぎ", "stub")]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         return b""
 
 
@@ -180,7 +180,7 @@ class CreditEngine:
             Speaker("ja-JP-Wavenet-A", "Google女声"),
         ]
 
-    def synthesize(self, text, speaker, speed=1.0):
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
         return b""
 
 
