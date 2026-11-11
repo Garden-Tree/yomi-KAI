@@ -10,6 +10,10 @@
 ``latency_*`` は読み上げの開始までの時間（メッセージの受信から再生の開始まで、``LatencyStats``）で、
 記録が無ければ ``null`` / 0。メッセージの本文・サーバー ID などは送らない。
 
+受け手は時刻を ``interval`` 秒の区間に分け、受信のあった区間の割合を稼働率とする。区間の境目で送信が
+前後して区間を取りこぼさないよう、送る時刻は UNIX 時刻で各区間のちょうど中ほどにそろえる（:func:`next_delay`）。
+接続した直後（起動・復帰）だけは、そろえずにすぐ送る。
+
 送信は aiohttp（discord.py の依存）で行い、タイムアウトは短く、失敗しても Bot には影響しない
 （WARNING ログは ``WARN_INTERVAL`` 秒に1回まで、それ以外は DEBUG）。このモジュールは discord を import しない。
 """
@@ -35,6 +39,18 @@ Clock = Callable[[], float]
 Sleep = Callable[[float], Awaitable[object]]
 Payload = dict[str, Any]
 Poster = Callable[[Payload], Awaitable[None]]
+
+
+def next_delay(now: float, interval: float) -> float:
+    """次に送るまでの秒数。``interval`` 秒の区間の中ほど（UNIX 時刻 ≡ interval/2）にそろえる。
+
+    いま送った区間の中ほどがまだ先でも、同じ区間に2回送らないよう次の区間まで待つ。
+    """
+    half = interval / 2
+    delay = (half - now % interval) % interval
+    if delay <= half:
+        delay += interval
+    return delay
 
 
 class StatusPushError(Exception):
@@ -91,6 +107,8 @@ def http_poster(url: str, token: str, *, timeout: float = TIMEOUT) -> Poster:
 class StatusPusher:
     """``is_alive()`` が真の間、``interval`` 秒ごとに ``payload()`` を ``post`` で送る。
 
+    ``clock`` は警告の間引き用の単調時計、``wall`` は送る時刻をそろえるための UNIX 時刻。
+
     ``post`` や ``payload`` が例外を送出しても、ループは止まらず呼び出し側にも伝播しない。
     """
 
@@ -104,6 +122,7 @@ class StatusPusher:
         idle_interval: float = IDLE_INTERVAL,
         warn_interval: float = WARN_INTERVAL,
         clock: Clock = time.monotonic,
+        wall: Clock = time.time,
         sleep: Sleep = asyncio.sleep,
     ) -> None:
         self._post = post
@@ -113,6 +132,7 @@ class StatusPusher:
         self.idle_interval = idle_interval
         self.warn_interval = warn_interval
         self._clock = clock
+        self._wall = wall
         self._sleep = sleep
         self._last_warning: float | None = None
         self._failing = False
@@ -140,7 +160,7 @@ class StatusPusher:
                 alive = False
             if alive:
                 await self.push_once()
-                await self._sleep(self.interval)
+                await self._sleep(next_delay(self._wall(), self.interval))
             else:
                 await self._sleep(self.idle_interval)
 

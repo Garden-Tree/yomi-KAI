@@ -13,7 +13,7 @@ from yomi_kai.dictionary import DictionaryStore
 from yomi_kai.main import YomiBot
 from yomi_kai.session import LatencyStats, LatencySummary
 from yomi_kai.settings import SettingsStore
-from yomi_kai.status_push import StatusPusher, StatusPushError, build_payload, http_poster
+from yomi_kai.status_push import StatusPusher, StatusPushError, build_payload, http_poster, next_delay
 
 URL = "https://status.example.com/api/heartbeat"
 TOKEN = "secret-push-token"
@@ -141,6 +141,22 @@ def test_http_poster_errors_hide_url_and_token(status, error, message):
 # --- 送信ループ ---
 
 
+@pytest.mark.parametrize(
+    ("now", "delay"),
+    [
+        (150.0, 300.0),  # 区間の中ほどで送ったら、次の区間の中ほどまで
+        (150.4, 299.6),
+        (1000.0, 50.0 + 300.0),  # 1000 は区間 [900, 1200) の中ほど（1050）より前。同じ区間には送らない
+        (1100.0, 250.0),  # 中ほどを過ぎていれば次の区間の中ほど（1350）
+        (1199.0, 151.0),
+        (1200.0, 450.0),
+    ],
+)
+def test_next_delay_aligns_to_the_middle_of_each_slot(now, delay):
+    assert next_delay(now, 300) == pytest.approx(delay)
+    assert (now + next_delay(now, 300)) % 300 == pytest.approx(150)
+
+
 class Cancel(Exception):
     pass
 
@@ -164,6 +180,7 @@ def run_pusher(alive, post, *, clock=None, sleeps_until_stop=None):
         idle_interval=30,
         warn_interval=1800,
         clock=clock or (lambda: 0.0),
+        wall=lambda: 150.0,
         sleep=sleep,
     )
 
