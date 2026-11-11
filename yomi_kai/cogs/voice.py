@@ -20,6 +20,7 @@ from ..blocklist import GuildBlocklist
 from ..config import Config
 from ..dictionary import DictionaryStore, UserDictionaryStore
 from ..plans import PlanManager
+from ..rejoin import VoiceSessionRegistry, rejoin_skip_reason
 from ..session import AFK_NOTICE, GuildSession, LatencyStats, SourceFactory, SynthesisStats
 from ..settings import (
     SettingsStore,
@@ -75,6 +76,7 @@ class VoiceCog(commands.Cog):
         blocklist: GuildBlocklist | None = None,
         plans: PlanManager | None = None,
         user_store: UserDictionaryStore | None = None,
+        voice_sessions: VoiceSessionRegistry | None = None,
     ) -> None:
         self.bot = bot
         self.config = config
@@ -103,6 +105,12 @@ class VoiceCog(commands.Cog):
         self.stats = SynthesisStats()
         # 受信から読み上げの開始までの時間（サーバーごとに直近100件、y.status で表示）
         self.latency = LatencyStats()
+        # 接続中のボイスチャンネルの記録（再起動後の自動再接続。None なら記録しない）
+        self.voice_sessions = voice_sessions
+        # 起動後の再接続を始めたか（on_ready は再接続のたびに呼ばれることがあるので一度だけ）
+        self._rejoin_started = False
+        # 終了中（Cog の取り外し中）は記録を消さない（次の起動で再接続するため）
+        self._closing = False
 
     def get_session(self, guild_id: int) -> GuildSession:
         session = self.sessions.get(guild_id)
@@ -116,14 +124,110 @@ class VoiceCog(commands.Cog):
                 stats=self.stats,
                 latency=self.latency,
             )
-            session.on_auto_close = lambda: self._note_auto_disconnect(guild_id)
+            session.on_auto_close = lambda: self._on_auto_close(guild_id)
             self.sessions[guild_id] = session
         return session
 
     def _note_auto_disconnect(self, guild_id: int) -> None:
         self._auto_disconnected_at[guild_id] = self._clock()
 
+    def _on_auto_close(self, guild_id: int) -> None:
+        """AFK タイマーによる自動切断。自動接続を少し待ち、再接続の記録を消す。"""
+        self._note_auto_disconnect(guild_id)
+        if self.voice_sessions is not None:
+            asyncio.get_running_loop().create_task(self._forget_session(guild_id))
+
+    # --- 再起動後の自動再接続（yomi_kai.rejoin） ---
+    async def _remember_session(self, guild_id: int, voice_id: int, text_id: int) -> None:
+        if self.voice_sessions is None:
+            return
+        try:
+            await asyncio.to_thread(self.voice_sessions.record, guild_id, voice_id, text_id)
+        except Exception:
+            logger.warning("接続の記録の保存に失敗しました (guild=%s)", guild_id, exc_info=True)
+
+    async def _forget_session(self, guild_id: int) -> None:
+        if self.voice_sessions is None or self._closing:
+            return
+        try:
+            await asyncio.to_thread(self.voice_sessions.forget, guild_id)
+        except Exception:
+            logger.warning("接続の記録の削除に失敗しました (guild=%s)", guild_id, exc_info=True)
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        if self._rejoin_started or self.voice_sessions is None:
+            return
+        self._rejoin_started = True
+        asyncio.get_running_loop().create_task(self.rejoin_sessions())
+
+    async def rejoin_sessions(self) -> int:
+        """前回の起動で接続していたボイスチャンネルに接続し直す。接続できた数を返す。失敗はログに残すだけ。"""
+        if self.voice_sessions is None:
+            return 0
+        try:
+            entries = await asyncio.to_thread(self.voice_sessions.load)
+        except Exception:
+            logger.warning("接続の記録を読み込めませんでした", exc_info=True)
+            return 0
+        rejoined = 0
+        for guild_id, (voice_id, text_id) in entries.items():
+            try:
+                if await self._rejoin(guild_id, voice_id, text_id):
+                    rejoined += 1
+            except Exception:
+                logger.warning("再接続に失敗しました (guild=%s)", guild_id, exc_info=True)
+                await self._forget_session(guild_id)
+        if entries:
+            logger.info("再起動前の接続 %d件のうち %d件に再接続しました", len(entries), rejoined)
+        return rejoined
+
+    async def _rejoin(self, guild_id: int, voice_id: int, text_id: int) -> bool:
+        guild = self.bot.get_guild(guild_id)
+        voice_channel = guild.get_channel(voice_id) if guild is not None else None
+        text_channel = guild.get_channel(text_id) if guild is not None else None
+        session = self.sessions.get(guild_id)
+        connected = guild is not None and (
+            (session is not None and session.is_connected)
+            or guild.voice_client is not None
+            or guild_id in self._autojoining
+        )
+        members = getattr(voice_channel, "members", None) or []
+        reason = rejoin_skip_reason(
+            guild_found=guild is not None,
+            voice_found=voice_channel is not None and hasattr(voice_channel, "connect"),
+            text_found=text_channel is not None and hasattr(text_channel, "send"),
+            blocked=self.blocklist is not None and self.blocklist.is_blocked(guild_id),
+            connected=connected,
+            members=sum(1 for m in members if not m.bot),
+            missing_permissions=(
+                missing_voice_permissions(voice_channel, guild.me) if voice_channel is not None else []
+            ),
+        )
+        if reason is not None:
+            logger.info("再起動前の接続に再接続しません (guild=%s): %s", guild_id, reason)
+            if not connected:
+                # すでに接続している場合は、その接続の記録なので消さない
+                await self._forget_session(guild_id)
+            return False
+
+        async def announce(embed: discord.Embed) -> None:
+            # デプロイのたびに投稿しないよう、再接続はログにだけ残す
+            return None
+
+        self._autojoining.add(guild_id)
+        try:
+            joined = await self._join(guild, voice_channel, text_channel, "再接続しました", announce)
+        finally:
+            self._autojoining.discard(guild_id)
+        if not joined:
+            await self._forget_session(guild_id)
+            return False
+        logger.info("%sに再接続しました (guild=%s)", voice_channel.name, guild_id)
+        return True
+
     async def cog_unload(self) -> None:
+        self._closing = True
         # close の途中で sessions が変わってもよいように、写しを回す
         for session in list(self.sessions.values()):
             await session.close()
@@ -289,6 +393,7 @@ class VoiceCog(commands.Cog):
             return False
 
         await self.get_session(guild.id).start(voice_client, text_channel)
+        await self._remember_session(guild.id, voice_channel.id, text_channel.id)
         embed = discord.Embed(title=title, color=EMBED_COLOR)
         embed.add_field(name="テキストチャンネル", value=f"{text_channel.name}", inline=False)
         embed.add_field(name="ボイスチャンネル", value=f"{voice_channel.name}", inline=False)
@@ -302,7 +407,11 @@ class VoiceCog(commands.Cog):
         return True
 
     async def _leave(self, guild: discord.Guild, notice: str | None = None, *, auto: bool = False) -> None:
-        """読み上げを止めて切断する。``auto=True`` なら自動切断として記録する（自動接続を少し待つため）。"""
+        """読み上げを止めて切断する。``auto=True`` なら自動切断として記録する（自動接続を少し待つため）。
+
+        通常の切断なので、再起動後の再接続の記録も消す。
+        """
+        await self._forget_session(guild.id)
         if auto:
             self._note_auto_disconnect(guild.id)
         session = self.sessions.get(guild.id)
@@ -478,6 +587,9 @@ class VoiceCog(commands.Cog):
             elif before.channel != after.channel and len(after.channel.members) == 1:
                 # 誰もいないチャンネルへ移動させられた
                 await self._leave(guild, AFK_NOTICE, auto=True)
+            elif before.channel != after.channel and session.text_channel is not None:
+                # 別のチャンネルへ移動させられた（再接続の記録を移動先にする）
+                await self._remember_session(guild.id, after.channel.id, session.text_channel.id)
             return
 
         voice_client = guild.voice_client
@@ -550,6 +662,7 @@ class VoiceCog(commands.Cog):
         self._last_reader.pop(guild.id, None)
         self._auto_disconnected_at.pop(guild.id, None)
         self.latency.forget(guild.id)
+        await self._forget_session(guild.id)
         # 設定・辞書のキャッシュも捨てる（evict を持つストアだけ）
         for store in (self.settings, self.store, self.user_store):
             evict = getattr(store, "evict", None)

@@ -21,6 +21,7 @@ from .dictionary import DictionaryStore, UserDictionaryStore
 from .health import DisconnectAlerter, heartbeat_loop, mask_url, webhook_sender
 from .plans import CHECK_INTERVAL as PREMIUM_CHECK_INTERVAL
 from .plans import PlanManager
+from .rejoin import VoiceSessionRegistry
 from .settings import SettingsStore
 from .tts import TTSEngine
 from .usage import UsageStore
@@ -95,6 +96,7 @@ class YomiBot(commands.Bot):
         usage: UsageStore | None = None,
         plans: PlanManager | None = None,
         user_store: UserDictionaryStore | None = None,
+        voice_sessions: VoiceSessionRegistry | None = None,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -112,6 +114,12 @@ class YomiBot(commands.Bot):
         # 個人辞書（既定はサーバー辞書のディレクトリの users/）
         self.user_store = user_store if user_store is not None else UserDictionaryStore(store.directory / "users")
         self.settings = settings
+        # 接続中のボイスチャンネルの記録（再起動後の自動再接続。既定は settings/voice_sessions.json）
+        self.voice_sessions = (
+            voice_sessions
+            if voice_sessions is not None
+            else VoiceSessionRegistry(settings.directory / "voice_sessions.json")
+        )
         # サーバーごとの上限と使える話者（engine はフリーで使える話者に絞ったエンジン）
         self.plans = plans if plans is not None else PlanManager(config, engine)
         self._premium_task: asyncio.Task[None] | None = None
@@ -288,6 +296,7 @@ class YomiBot(commands.Bot):
                 blocklist=self.blocklist,
                 plans=self.plans,
                 user_store=self.user_store,
+                voice_sessions=self.voice_sessions,
             )
         )
         await self.add_cog(SettingsCog(self, self.config, self.engine, self.settings, plans=self.plans))

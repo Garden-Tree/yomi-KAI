@@ -293,6 +293,10 @@ class SettingsStore:
         self._failed = failed_loads if failed_loads is not None else FailedLoads()
         self._lock = threading.Lock()
 
+    @property
+    def directory(self) -> Path:
+        return self._dir
+
     def path_for(self, guild_id: int) -> Path:
         return self._dir / f"{guild_id}.json"
 
