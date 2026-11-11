@@ -28,8 +28,10 @@ yomi_kai/
   blocklist.py         # GuildBlocklist: 利用を断るサーバーの一覧（settings/blocked_guilds.txt）の読み込み（discord を import しない）
   text.py              # 読み上げテキスト整形・添付ファイルの説明・入退室の判定（純粋関数のみ。I/Oなし）
   jsonfile.py          # JSON の読み込みとアトミック書き込み（DictionaryStore / SettingsStore で共有）
-  dictionary.py        # DictionaryStore: dict/{guild_id}.json の読み込み・キャッシュ・アトミック書き込み
-  settings.py          # SettingsStore: settings/{guild_id}.json（話者・速度・入退室の読み上げ）と resolve_voice（話者・速度の決定）
+  dictionary.py        # DictionaryStore: dict/{guild_id}.json、UserDictionaryStore: 個人辞書 dict/users/{guild_id}.json
+  settings.py          # SettingsStore: settings/{guild_id}.json（話者・速度・高さ・各種オン/オフ）と resolve_voice / resolve_pitch
+  plans.py             # PlanManager: サーバーごとの上限（limits_for）と使える話者、PremiumGuilds: settings/premium.json
+  rejoin.py            # VoiceSessionRegistry: 再起動後の自動再接続のための接続の記録（settings/voice_sessions.json）
   session.py           # GuildSession: サーバーごとの接続・キュー・ワーカー・AFKタイマー
   ui.py                # 話者選択ドロップダウン（discord.ui.Select / View）
   tts/
@@ -39,23 +41,24 @@ yomi_kai/
     google.py          # GoogleEngine
   cogs/
     common.py          # reply（スラッシュでは ephemeral にできる返信）・original_error などの共通ヘルパー
-    voice.py           # help / c / dc / s / status コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・自動接続・入退室の読み上げ）
-    settings.py        # voice / speed（ユーザーごとの話者・速度）、announce / readname / speedup / readbots（サーバー全体のオン/オフ）
-    dictionary.py      # dict add / del / list / export / import / help
+    voice.py           # help / c / dc / s / status コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・自動接続・入退室の読み上げ）、起動後の再接続
+    settings.py        # voice / speed / pitch（ユーザーごと）、announce / readname / speedup / readbots / read（サーバー全体）
+    dictionary.py      # dict add / del / list / export / import / help、mydict add / del / list（個人辞書）
+    plan.py            # plan（このサーバーの上限の表示）
     misc.py            # sd（突然の死、ENABLE_SUDDEN_DEATH = False なら Cog ごと追加しない）、credit（音声のクレジット表記）
     admin.py           # サーバー管理者向け: ignore（読み上げない人・ロール）、autojoin（自動接続）
 docker-entrypoint.sh   # Docker: ボリュームの所有者を直してから一般ユーザーで起動
-tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist）
+tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist / plans / pitch / read_toggles / user_dictionary / rejoin）
 docs/hosting.md        # 公開版（ホスティング）向けの推奨設定・ブラックリスト・使用量・保存するデータ
 ```
 
 ### 2.1 TTSエンジン
-`TTSEngine` は `synthesize(text, speaker, speed=1.0) -> bytes`（WAV）、`speakers() -> list[Speaker]`、`default_speaker` を持つプロトコルです。`speed` は話速の倍率です。
+`TTSEngine` は `synthesize(text, speaker, speed=1.0, pitch=0.0) -> bytes`（WAV）、`speakers() -> list[Speaker]`、`default_speaker` を持つプロトコルです。`speed` は話速の倍率、`pitch` は声の高さで VOICEVOX の `pitch_scale`（対数の基本周波数に足す値）と同じ単位です。
 
-* **VoicevoxEngine**: ONNX Runtime と Open JTalk 辞書を起動時に一度だけ読み込み、既定では `models/vvms/0.vvm` のみをロードします（`config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を書くと `*.vvm` をすべてロード）。話者一覧はモデルのメタ情報（`VoiceModelFile.metas`）から構築し、ノーマルスタイルはキャラクター名（例: `ずんだもん`、`春日部つむぎ`）、その他のスタイルは `名前（スタイル名）` のラベルになります。ずんだもん・春日部つむぎは常に先頭に並び、Discord の制限によりドロップダウンには最大25件まで表示されます。速度が 1.0 なら `Synthesizer.tts()`、それ以外は `create_audio_query()` → `speed_scale` を設定 → `synthesis()` で合成します（いずれも `voicevox_core.asyncio` の API。次項）。
-* **GoogleEngine**: `USE_GOOGLE_TTS = True` の場合のみ構築され、`CompositeEngine` で VOICEVOX と束ねられます（初期話者は `ja-JP-Wavenet-A`）。速度は `AudioConfig.speaking_rate` で指定します。
+* **VoicevoxEngine**: ONNX Runtime と Open JTalk 辞書を起動時に一度だけ読み込み、既定では `models/vvms/0.vvm` のみをロードします（`config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を書くと `*.vvm` をすべてロード）。話者一覧はモデルのメタ情報（`VoiceModelFile.metas`）から構築し、ノーマルスタイルはキャラクター名（例: `ずんだもん`、`春日部つむぎ`）、その他のスタイルは `名前（スタイル名）` のラベルになります。ずんだもん・春日部つむぎは常に先頭に並び、Discord の制限によりドロップダウンには最大25件まで表示されます。速度が 1.0・高さが 0.0 なら `Synthesizer.tts()`、それ以外は `create_audio_query()` → `speed_scale` / `pitch_scale` を設定 → `synthesis()` で合成します（いずれも `voicevox_core.asyncio` の API。次項）。
+* **GoogleEngine**: `USE_GOOGLE_TTS = True` の場合のみ構築され、`CompositeEngine` で VOICEVOX と束ねられます（初期話者は `ja-JP-Wavenet-A`）。速度は `AudioConfig.speaking_rate`、高さは `AudioConfig.pitch`（`tts.google_semitones()` が `pitch` を同じ変化になる半音に換算、±20 まで）で指定します。
 * **CompositeEngine**: 話者名で担当エンジンへ振り分け、`speed` はそのまま渡します。
-* **FilteredEngine（話者の許可リスト）**: `config.ini` の `SPEAKER_ALLOWLIST`（`y.voice list` の表示どおりの名前をカンマ区切り）が指定されていれば、`main.apply_speaker_allowlist()` が起動時に一度だけ、構築したエンジン（`CompositeEngine` を含む）を `FilteredEngine` で包みます。`speakers()` は元の順序のまま許可された話者だけを返し、`synthesize()` は元のエンジンに任せます（許可されていない話者が渡されたら既定話者で合成）。元の既定話者が許可されていなければ、許可された最初の話者を既定にします。Cog はすべてこの包んだエンジンを受け取るので、ドロップダウン・`y.voice 名前`・`y.voice list`・`resolve_voice`・`y.credit` は許可された話者しか見ません（保存済みの設定が許可外の話者を指していれば `resolve_voice` が次の段へ飛ばす）。見つからない名前は起動時に警告し、1つも残らなければ `ConfigError` として exit(1) します。未設定なら包みません。
+* **FilteredEngine（話者の許可リスト）**: `config.ini` の `SPEAKER_ALLOWLIST`（`y.voice list` の表示どおりの名前をカンマ区切り）が指定されていれば、`main.build_plans()` → `apply_speaker_allowlist()` が起動時に一度だけ、構築したエンジン（`CompositeEngine` を含む）を `FilteredEngine` で包みます（`PREMIUM_ENABLED = True` なら `PREMIUM_SPEAKER_ALLOWLIST` でも別に包む。3.3節）。`speakers()` は元の順序のまま許可された話者だけを返し、`synthesize()` は元のエンジンに任せます（許可されていない話者が渡されたら既定話者で合成）。元の既定話者が許可されていなければ、許可された最初の話者を既定にします。Cog は `PlanManager.speakers_for(guild_id)` でそのサーバーのプランに応じた包んだエンジンを使うので、ドロップダウン・`y.voice 名前`・`y.voice list`・`resolve_voice`・`y.credit` は許可された話者しか見ません（保存済みの設定が許可外の話者を指していれば `resolve_voice` が次の段へ飛ばす）。見つからない名前は起動時に警告し、1つも残らなければ `ConfigError` として exit(1) します。未設定なら包みません。
 * **クレジット表記**: `Speaker.credit` に利用規約で求められる表記を持たせます。`VoicevoxEngine` はモデルのメタ情報（`VoiceModelFile.metas` のキャラクター名）から `VOICEVOX:ずんだもん` を設定し（スタイル名は含まない。ラベルの解析はしない）、Google の話者は `None` です。`y.credit` は使える話者の `credit` を重複なく並べ、VOICEVOX の利用規約（https://voicevox.hiroshiba.jp/term/ ）へのリンクと、Google TTS 有効時はその旨を添えます。
 * **VOICEVOX の並行合成（Synthesizer のプール）**: voicevox_core 0.16.4 のソースを確認した結果、次のことが分かっています。
   * ONNX のセッションは `async_lock::Mutex<ort::session::Session>` で守られている（[crates/voicevox_core/src/core/infer/runtimes/onnxruntime.rs](https://github.com/VOICEVOX/voicevox_core/blob/0.16.4/crates/voicevox_core/src/core/infer/runtimes/onnxruntime.rs)）。1つの `Synthesizer` を複数スレッドから呼んでも安全だが、推論は直列になる。
@@ -73,7 +76,7 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 サーバーごとの状態はすべて `GuildSession` が持ち、`VoiceCog.sessions: dict[int, GuildSession]`（キーは `guild.id`）で管理します。モジュールレベルの可変状態はありません。
 
 * **接続 (`c`)**: ボイスクライアントと読み上げ対象のテキストチャンネルを `session.start()` に渡し、ワーカータスクを起動、AFKタイマーを開始します（発言がなくても `AFK_TIME` 秒後に自動切断）。
-* **読み上げ**: `on_message` は発言者の話者・速度を `resolve_voice()` で決め（2.3節）、整形済みテキストと一緒に `session.enqueue(text, speaker, speed)` で積むだけです（AFKタイマーも張り直す）。`enqueue` は `text.split_for_synthesis()` でメッセージを合成用のかたまりに分けます（2.2.1）。セッション自体は話者を持ちません。
+* **読み上げ**: `on_message` は発言者の話者・速度を `resolve_voice()`、高さを `resolve_pitch()` で決め（2.3節）、整形済みテキストと一緒に `session.enqueue(text, speaker, speed, pitch=...)` で積むだけです（AFKタイマーも張り直す）。`enqueue` は `text.split_for_synthesis()` でメッセージを合成用のかたまりに分けます（2.2.1）。セッション自体は話者を持ちません。
 * **ワーカー**: 1サーバーにつき1本。再生前のかたまりが最大 `PREFETCH_CHUNKS`（3）個になるよう、メッセージをまたいで次のかたまりの合成を `synthesize_async()` で並行に始め、かたまりを必ずキュー投入順に1つずつ再生します（合成が遅いかたまりがあっても追い越さない）。長文でも最初の文の合成が終われば再生が始まり、その再生中に続きを合成します。かたまりの間にはわずかな間が空きます（音声の連結はしない）。1つのかたまりの合成に失敗した場合はそのかたまりだけ飛ばし、「読み上げに失敗しました」はメッセージごとに1回だけ通知します。FFmpeg のソースは `voice_client.play()` の直前に生成し、再生完了の `after` コールバックは `loop.call_soon_threadsafe` でイベントループ側の `asyncio.Event` をセットしてワーカーに制御を戻します。
 * **スキップ (`s` / `s all`)**: スキップはメッセージ単位です。`s` は再生中（または合成待ち）のメッセージに印を付けて、その残りのかたまり（先読み合成済みのものを含む）の合成タスクを取り消し、再生中なら `voice_client.stop()` します。`s all` はキューを空にしたうえで「世代番号」を1つ進め、先読み中のタスクを取り消します。各メッセージは積まれた時点の世代番号を持ち、ワーカーは世代が古いかたまりを再生せずに捨てます。切断（`close()`）でも合成中のタスクをすべて取り消します。
 * **入退室の読み上げ**: `on_voice_state_update` で、Bot 以外のメンバーが Bot のいるボイスチャンネルに入る・出る（チャンネル間の移動を含む）と、`text.voice_transition()` が入室・退室を判定し、「〇〇さんが入室しました」「〇〇さんが退室しました」をサーバーの話者・速度 1.0 で `session.enqueue` します（個人の話者と区別するため）。ミュート・配信などの変更や Bot 自身の接続では読み上げません。退室で Bot だけが残る場合は読み上げずに自動切断します。サーバー設定 `announce_voice`（`y.announce on|off`、既定オン）で無効にできます。
@@ -81,6 +84,7 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 * **読み上げる発言の選別**: この Bot 自身の発言は読みません。ほかの Bot・Webhook（`message.webhook_id`）の発言は `read_bots` がオンのときだけ読みます（`settings.should_read_author()`）。`ignored_users` のユーザー、`ignored_roles` のロールを持つメンバーの発言も読みません（`settings.is_ignored()`）。
 * **混雑時の早読み（`queue_speedup`、既定オン）**: `enqueue(..., speedup=True)` で積んだメッセージは、ワーカーが最初のかたまりの合成を始める時点で、合成を始めていないメッセージ（そのメッセージ自身を含む）が3件以上なら1.25倍、6件以上なら1.5倍の速度にします（`session.backlog_speed()`、上限2.0倍、元の速度より遅くはしない）。速度はメッセージの読み始めに決め、残りのかたまりも同じ速度で読みます。入退室の読み上げも対象です。読み上げ待ちが溜まったときだけ働く動作の変更で、`y.speedup off` で従来どおりになります。
 * **自動接続（`autojoin`）**: `on_voice_state_update` で、Bot 以外のメンバーが登録されたボイスチャンネルに入り（移動を含む）、そのサーバーで Bot がまだ接続していなければ、`channel.connect()` → `session.start()` で対応するテキストチャンネルを読み上げ始め、「自動接続しました」の埋め込みを投稿します（ドロップダウンは出さない。判定は `text.autojoin_text_channel()`）。接続中のサーバーは `_autojoining` で印を付け、同時に複数人が入っても1回だけ接続します。自動切断（AFK タイマー・無人・無人のチャンネルへの移動・キックや切断）の時刻を記録し、そこから30秒間は自動接続しません（`text.autojoin_allowed()`。接続と切断の繰り返しを防ぐ）。AFK タイマーによる切断は `GuildSession.on_auto_close` で知らせます。
+* **再起動後の自動再接続（`rejoin.py`）**: `_join()` が接続（移動を含む）のたびに `VoiceSessionRegistry.record()` で `settings/voice_sessions.json` に `{"<guild_id>": {"voice": "<id>", "text": "<id>"}}` を書き、別のチャンネルへ移動させられたときも書き直します。`_leave()`（`dc`・無人・キック・無人のチャンネルへの移動）・AFK タイマーの切断（`on_auto_close`）・`on_guild_remove` で `forget()` します。Bot の終了（`cog_unload`）では `_closing` を立てて消さないので、デプロイや `docker stop` のあとも記録が残ります。起動後の最初の `on_ready` で一度だけ（`_rejoin_started`）`rejoin_sessions()` をタスクで動かし、記録ごとに `rejoin.rejoin_skip_reason()` で、サーバー・チャンネルがある、ブロックされていない、まだ接続していない、Bot 以外のメンバーがいる、接続・発言の権限がある、を確かめてから `_join()` します（`_autojoining` に入れて自動接続と重ならないようにする。埋め込みは投稿せずログだけ）。すでに接続している（自動接続が先に動いた）場合は記録を残したまま飛ばし、それ以外で再接続しなかった・失敗したものは記録を消します。記録の読み書きの失敗は WARNING ログにとどめます。
 * **AFKタイマー**: 読み上げ中（再生中・合成中・未合成のかたまりが残っている）は切断せず、読み上げが終わってからさらに `AFK_TIME` 秒待ちます。
 * **切断**: `dc` コマンド・Botのキック・AFKタイムアウト・VCが無人になった場合のいずれも `session.close()` を通り、ワーカー停止 → キュー破棄 → 再生停止 → 切断を行います。話者・速度の設定は `SettingsStore` に保存されているため、再接続・再起動後も引き継がれます。
 
@@ -93,22 +97,23 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 `settings/{guild_id}.json` に次の形式で保存します（`DictionaryStore` と同じく、メモリキャッシュ・`threading.Lock`・一時ファイル + fsync + `os.replace` によるアトミック書き込み。書き込み処理は `jsonfile.py` で共有）。
 
 ```json
-{"speaker": "春日部つむぎ", "announce_voice": true, "users": {"<user_id>": {"speaker": "ずんだもん", "speed": 1.2}},
+{"speaker": "春日部つむぎ", "announce_voice": true, "users": {"<user_id>": {"speaker": "ずんだもん", "speed": 1.2, "pitch": 3}},
  "read_name": false, "queue_speedup": true, "read_bots": false,
+ "read_url": true, "read_emoji": true, "read_code": false, "read_spoiler": false,
  "ignored_users": ["<user_id>"], "ignored_roles": ["<role_id>"], "autojoin": {"<voice_channel_id>": "<text_channel_id>"}}
 ```
 
-* 追加したキーはどれも省略可能で、省略時は `read_name` = false、`queue_speedup` = true、`read_bots` = false、`ignored_users` / `ignored_roles` / `autojoin` = 空です。ID は文字列で保存します（読み込み時は数字の文字列・整数のどちらも受け付け、それ以外は形式エラー）。`ignored_users` / `ignored_roles` はそれぞれ25件、`autojoin` は5件まで（上限は登録時に `SettingsStore` のロックの中で確かめる）。
+* 追加したキーはどれも省略可能で、省略時は `read_name` = false、`queue_speedup` = true、`read_bots` = false、`read_url` / `read_emoji` = true、`read_code` / `read_spoiler` = false、`pitch` = 未設定（0）、`ignored_users` / `ignored_roles` / `autojoin` = 空です。ID は文字列で保存します（読み込み時は数字の文字列・整数のどちらも受け付け、それ以外は形式エラー）。`ignored_users` / `ignored_roles` はそれぞれ25件、`autojoin` は5件まで（上限は登録時に `SettingsStore` のロックの中で確かめる）。
 
-* `y.c` のドロップダウン → サーバーの話者（`speaker`）。`y.voice` のドロップダウン → 操作したユーザーの話者（`y.voice 名前` はコマンドを打ったユーザーの話者）。`y.announce on|off` → 入退室の読み上げ（`announce_voice`、未設定なら true）。`y.speed` → コマンドを打ったユーザーの速度（0.5〜2.0）。`y.readname` / `y.speedup` / `y.readbots` → `read_name` / `queue_speedup` / `read_bots`（`set_flag`）。`y.ignore add|del` → `ignored_users` / `ignored_roles`。`y.autojoin add|del` → `autojoin`。`reset` で解除し、ユーザーの設定が空になったらエントリごと削除します。
+* `y.c` のドロップダウン → サーバーの話者（`speaker`）。`y.voice` のドロップダウン → 操作したユーザーの話者（`y.voice 名前` はコマンドを打ったユーザーの話者）。`y.announce on|off` → 入退室の読み上げ（`announce_voice`、未設定なら true）。`y.speed` → コマンドを打ったユーザーの速度（0.5〜2.0）。`y.readname` / `y.speedup` / `y.readbots` → `read_name` / `queue_speedup` / `read_bots`（`set_flag`）。`y.pitch` → コマンドを打ったユーザーの `pitch`（-10〜+10 の整数）。`y.read url|emoji|code|spoiler on|off` → `read_url` / `read_emoji` / `read_code` / `read_spoiler`（表示は誰でも、変更はコマンドの中で「サーバー管理」の権限を確かめる）。`y.ignore add|del` → `ignored_users` / `ignored_roles`。`y.autojoin add|del` → `autojoin`。`reset` で解除し、ユーザーの設定が空になったらエントリごと削除します。
 * 書き込みはイベントループから `asyncio.to_thread` 経由で行い、読み込みは `aget()`（キャッシュがあれば I/O なし）を使います。
 * 壊れたファイルは読み込み時は空の設定として扱い（ログに出力）、書き込み時は上書きせずに例外を送出します（辞書と同じ方針）。発言のたびに読み直さないよう、読み込みに失敗してから60秒は読み直さずに空の設定を返し（`jsonfile.FailedLoads`）、トレースバックはファイルが変わったときだけ出します。未知のキーは書き込み時もそのまま残します。
-* **話者の決定順（`resolve_voice`）**: ユーザー個人の話者 → サーバーの話者 → エンジンの既定話者。保存された話者が現在のエンジンで利用できない場合（Google TTS を無効にした、モデルを減らした等）はその段を飛ばします。速度はユーザーの設定、なければ 1.0（範囲外の値は 0.5〜2.0 に丸める）。
+* **話者の決定順（`resolve_voice`）**: ユーザー個人の話者 → サーバーの話者 → エンジンの既定話者。保存された話者が現在のエンジンで利用できない場合（Google TTS を無効にした、モデルを減らした等）はその段を飛ばします。速度はユーザーの設定、なければ 1.0（範囲外の値は 0.5〜2.0 に丸める）。高さ（`resolve_pitch`）はユーザーの段階 × 0.015（±10 で ±0.15、約 ±2.6 半音）を `pitch` として渡し、未設定なら 0.0。
 
 ### 2.4 コマンド（hybrid コマンド）
 コマンドはすべて `commands.hybrid_command` / `hybrid_group` で定義しており、1つの実装で `y.c`（プレフィックス）と `/c`（スラッシュコマンド）の両方に対応します。
 
-* スラッシュコマンド名はプレフィックスと同じ（`c`, `dc`, `s`, `voice`, `speed`, `announce`, `dict add|del|list|export|import|help`, `sd`, `credit`, `help`, `readname`, `speedup`, `readbots`, `ignore add|del|list`, `autojoin add|del|list`, `status`）で、日本語の説明と引数の説明（`app_commands.describe`）を付けています。`s` の `mode` は `all` のみの選択肢、`announce` の `state` は `on` / `off` の選択肢、`speed` の `value` は `reset` も受け付けるため文字列です。サーバー専用のコマンドは `commands.guild_only()` / `app_commands.guild_only()` により DM のスラッシュコマンド一覧にも出ません。設定・辞書・管理者向けの Cog は、DM での実行（プレフィックスのサブコマンドを含む）を Cog の `cog_check`（`cogs/common.guild_only_check`）で一律に `NoPrivateMessage` にしており、`Bot.on_command_error` が「このコマンドはサーバー内でのみ使用できます」と返します（`invoke_without_command` のグループでは、グループの `commands.guild_only()` がプレフィックスのサブコマンドに効かないため）。
+* スラッシュコマンド名はプレフィックスと同じ（`c`, `dc`, `s`, `voice`, `speed`, `pitch`, `announce`, `dict add|del|list|export|import|help`, `mydict add|del|list`, `sd`, `credit`, `help`, `readname`, `speedup`, `readbots`, `read list|url|emoji|code|spoiler`, `ignore add|del|list`, `autojoin add|del|list`, `status`, `plan`）で、日本語の説明と引数の説明（`app_commands.describe`）を付けています。`s` の `mode` は `all` のみの選択肢、`announce` の `state` は `on` / `off` の選択肢、`speed` の `value` は `reset` も受け付けるため文字列です。サーバー専用のコマンドは `commands.guild_only()` / `app_commands.guild_only()` により DM のスラッシュコマンド一覧にも出ません。設定・辞書・管理者向けの Cog は、DM での実行（プレフィックスのサブコマンドを含む）を Cog の `cog_check`（`cogs/common.guild_only_check`）で一律に `NoPrivateMessage` にしており、`Bot.on_command_error` が「このコマンドはサーバー内でのみ使用できます」と返します（`invoke_without_command` のグループでは、グループの `commands.guild_only()` がプレフィックスのサブコマンドに効かないため）。
 * 返信はすべて `ctx.send`（`cogs/common.reply`）を通します。プレフィックスでは従来どおりチャンネルへの送信、スラッシュではインタラクションへの応答（2通目以降はフォローアップ）になるので「アプリケーションが応答しませんでした」になりません。`reply(..., private=True)` はスラッシュのときだけ ephemeral（本人にだけ表示）になり（`ctx.interaction is not None` で判定）、個人設定（`voice` / `speed`）の返信や引数の誤りの案内に使います。`voice` のドロップダウンは誰でも操作できるため公開のままです。`c` / `dc` は接続・切断に時間がかかることがあるため、先に `ctx.defer()` します（プレフィックスでは何もしない）。
 * 引数の過不足・不正な値（`commands.UserInputError`）は各 Cog の `cog_command_error` が従来と同じ案内（「コマンドが間違っています」など）を返します（`ignore_extra=False` で余分な引数もエラーにする）。設定・辞書ファイルの読み書きの失敗（`OSError` / `ValueError`）も「設定の保存に失敗しました」「辞書の保存に失敗しました」を本人にだけ返します（返さないとスラッシュが「考え中…」のまま残る）。判定は共通の `cogs/common.handle_command_error` で行い、プレフィックスの `CommandInvokeError` とスラッシュの `HybridCommandError` を `original_error()` でほどいてから判定します。
 * **サーバー管理者向けのコマンド**: `ignore add|del`・`autojoin add|del`・`readbots`・`dict import` は `commands.has_guild_permissions(manage_guild=True)` で「サーバー管理」の権限を求めます（スラッシュでも hybrid コマンドのチェックとして働く）。権限がなければ各 Cog の `cog_command_error` が「このコマンドを使うには「サーバー管理」の権限が必要です」を返し（スラッシュでは ephemeral）、`Bot.on_command_error` は `CheckFailure` をエラーとして記録しません。`ignore` の対象は `discord.Member | discord.Role`（スラッシュではメンション可能な値の選択肢）、`dict import` のファイルは `discord.Attachment`（プレフィックスではメッセージの添付、スラッシュでは `attachment` 引数）です。
@@ -126,8 +131,8 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 
 ## 3. アプリケーションの動作フロー
 1. **テキスト受信**: `VoiceCog.on_message` でテキストをフック（コマンド用のプレフィックスから始まるもの、Bot・DM・読み上げ対象外チャンネルの発言は除外）。
-2. **辞書置換**: `dict/{guild.id}.json` の内容を `DictionaryStore` が初回のみスレッドで読み込み、コンパイル済み正規表現と一緒にメモリへキャッシュ（`dict add` / `dict del` 時は書き込んだ内容で差し替えるため、読み上げ時にファイル I/O は発生しない）。長い単語を優先して読み仮名に置換。
-3. **前処理**: コードブロック（「コード省略」に置換、インラインコードは中身だけ残す）、URL、ネタバレタグ(`\|\|...\|\|`)、メンション(`<@...>` / `<@&...>` / `<#...>`)、カスタム絵文字、簡易なマークダウンを置換（`text.build_read_text`）。`*強調*` は記号の内側が空白でない場合のみ、`_強調_` は英数字に挟まれていない場合のみ除去するため、`snake_case_name` や `2 * 3 * 4` はそのまま読まれます。続いて添付ファイル・スタンプの説明（`text.describe_attachments`: 「画像」「画像2枚」「動画」「音声」「ファイル」「スタンプ 名前」。種類は content_type、無ければ拡張子で判断）を末尾に付け（本文が空でも読み上げる）、最後にそれも含めて `MAX_READ_LENGTH` 文字を超えた分を切り詰めて「以下略」を付けます。
+2. **辞書置換**: 発言者の個人辞書（`dict/users/{guild.id}.json` の発言者の分、`UserDictionaryStore`）を先に、続いてサーバー辞書を当てます。`dict/{guild.id}.json` の内容を `DictionaryStore` が初回のみスレッドで読み込み、コンパイル済み正規表現と一緒にメモリへキャッシュ（`dict add` / `dict del` 時は書き込んだ内容で差し替えるため、読み上げ時にファイル I/O は発生しない）。長い単語を優先して読み仮名に置換。
+3. **前処理**: コードブロック（「コード省略」に置換、インラインコードは中身だけ残す）、URL、ネタバレタグ(`\|\|...\|\|`)、メンション(`<@...>` / `<@&...>` / `<#...>`)、カスタム絵文字、簡易なマークダウンを置換（`text.build_read_text`）。URL・カスタム絵文字・コードブロック・ネタバレの扱いはサーバー設定（`y.read`）の `text.ReadOptions` で切り替えます（URL・絵文字は読まない、コードブロック・ネタバレは中身を読む、を選べる。既定は従来どおり）。`*強調*` は記号の内側が空白でない場合のみ、`_強調_` は英数字に挟まれていない場合のみ除去するため、`snake_case_name` や `2 * 3 * 4` はそのまま読まれます。続いて添付ファイル・スタンプの説明（`text.describe_attachments`: 「画像」「画像2枚」「動画」「音声」「ファイル」「スタンプ 名前」。種類は content_type、無ければ拡張子で判断）を末尾に付け（本文が空でも読み上げる）、最後にそれも含めて、そのサーバーのプランの最大文字数（`PlanManager.limits_for().max_read_length`。フリーは `MAX_READ_LENGTH`）を超えた分を切り詰めて「以下略」を付けます。
 4. **音声合成・再生**: 上記のワーカーが、メッセージを文ごとのかたまりに分けて先読みしながら、発言者ごとに決めた話者・速度（2.3節）に応じたエンジンでメモリ上に WAV を生成し、FFmpeg 経由で順番にVCへ送信。
 5. **AFK監視**: 接続時および読み上げのたびにタイマーを張り直し、`AFK_TIME` 秒間読み上げがない場合や、VCにBot以外誰もいなくなった場合は自動でボイスチャンネルから切断。
 
@@ -150,6 +155,16 @@ docs/hosting.md        # 公開版（ホスティング）向けの推奨設定�
 * ブロックされたサーバーでは、`YomiBot.on_message` がプレフィックスのコマンドを処理せず、`bot.add_check` のグローバルチェックがコマンド（hybrid コマンドのスラッシュ側も `bot.can_run` を通る）を弾き、`VoiceCog.on_message` が読み上げません。`on_command_error` もブロックされたサーバーには何も返しません。
 * `on_ready`（参加中のすべてのサーバー）・`on_guild_join`・ファイルの更新で新たにブロックされたとき、`leave_blocked_guild()` が接続中のセッションを `close()` してから `guild.leave()` し、サーバー ID と名前を WARNING で記録します。
 
+### 3.3 プランと上限（`plans.py`）
+* `PlanManager.limits_for(guild_id)` が `Limits`（`plan`・`max_read_length`・`max_dict_entries`・`max_user_dict_entries`・`expires`、数値の 0 は無制限）を返し、`speakers_for(guild_id)` / `engine_for(guild_id)` がそのサーバーで使える話者に絞ったエンジンを返します。読み上げの文字数（`VoiceCog.on_message`）、サーバー辞書・個人辞書の登録数（`DictionaryCog`）、話者の一覧・決定（`VoiceCog` / `SettingsCog` / `MiscCog`）はすべてここを通します。合成は読み込んだ全話者のエンジン（`base_engine`）で行い、使える話者かどうかは `resolve_voice` が確かめます。
+* フリーの値は従来のキー（`MAX_READ_LENGTH` / `MAX_DICT_ENTRIES` / `MAX_USER_DICT_ENTRIES` / `SPEAKER_ALLOWLIST`）、プレミアムの値は `PREMIUM_MAX_READ_LENGTH` / `PREMIUM_MAX_DICT_ENTRIES` / `PREMIUM_MAX_USER_DICT_ENTRIES` / `PREMIUM_SPEAKER_ALLOWLIST`（空・0 で無制限、話者は空なら全話者）です。
+* `PREMIUM_ENABLED = False`（既定）のときは `PremiumGuilds` を作らず、すべてのサーバーがフリーです（既定の設定ではすべて無制限）。True のときは `settings/premium.json`（`PREMIUM_GUILDS_FILE`、`{"<guild_id>": null | "YYYY-MM-DD" | {"expires": ...}}`）を `setup_hook` で一度読み、以後 `YomiBot._watch_premium` が30秒ごとに `asyncio.to_thread` で更新時刻を確かめて読み直します。期限はその日まで有効で、`limits_for` を呼ぶたびに今日の日付と比べます。壊れたファイルは前回の内容のまま使い（同じファイルでは警告を一度だけ）、読めない項目は警告して飛ばします。`limits_for` は I/O をしません。決済の処理はありません。
+* `y.plan`（`cogs/plan.py`）は、プラン（`PREMIUM_ENABLED` のときだけ）・読み上げる文字数・サーバー辞書と自分の個人辞書の件数 / 上限・話者の数を表示し、フリーのサーバーにはプレミアムの上限を1行で案内します。
+
+### 3.4 個人辞書（`UserDictionaryStore`）
+* `dict/users/{guild_id}.json` に `{"<user_id>": {"単語": "読み"}}` で保存します（Docker では `dict/` のボリュームに含まれる）。サーバーごとに1ファイルを読み、ユーザーごとのコンパイル済み辞書をキャッシュします。登録の規則（`validate_entry`）・壊れたファイルの扱い（`FailedLoads`、書き込み時は上書きしない）・アトミックな書き込みは `DictionaryStore` と同じで、上限はユーザーごとに数えます。
+* `build_read_text(..., user_dictionary=...)` が、メンション・サーバー絵文字を守ったまま個人辞書 → サーバー辞書の順に当てます。
+
 ## 4. デプロイと配布アーキテクチャ
 
 多様な環境で「面倒な環境構築なしに、誰でもすぐに動かせる」ことに重きを置いて設計されています。
@@ -166,7 +181,7 @@ Python環境の構築やコマンド操作をユーザーに強いることな�
 
 ### 4.2 自己ホスト向けのDocker版
 Linuxサーバー、NAS、クラウドインスタンス等向けに、`docker-compose` での一発構築を提供しています。
-軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`)、各種ログ(`log/`)、月ごとの使用量(`usage/`、`RECORD_USAGE = True` の場合)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
+軽量な `python:3.12-slim-bookworm` をベースに設計しており、コンテナビルド時にLinux（x86_64, arm64等）向けの `voicevox-downloader` を自動で叩き、ONNX Runtimeとモデルを準備します。ユーザー設定(`config.ini`)や辞書(`dict/`)、サーバーごとの設定(`settings/`。接続の記録・プレミアムの一覧も含む)、各種ログ(`log/`)、月ごとの使用量(`usage/`、`RECORD_USAGE = True` の場合)はコンテナ外のホスト側に紐付けられ、永続化されるモダンな構成を実現しています。
 
 * **一般ユーザーでの実行**: Bot はイメージ内で作成した `yomi`（uid/gid 1000）ユーザーで動きます。ボリュームのディレクトリは Docker がホスト側に root 所有で作るため、`docker-entrypoint.sh` が root で起動して `dict/` `settings/` `log/` `usage/` のうち所有者が違うものだけ `chown` し、`setpriv --reuid --regid --init-groups` で権限を落としてから Bot を起動します（既存の環境でも手作業は不要）。`config.ini`（読み取り専用マウント）が `yomi` で読めない権限の場合だけは、警告を出して root のまま起動します。
 * **ヘルスチェック**: `HEALTHCHECK` で `python -m yomi_kai.health` を60秒ごとに実行し（起動後120秒は猶予）、ハートビートが途絶えるとコンテナが `unhealthy` になります（`restart: unless-stopped` は unhealthy では再起動しないため、状態の可視化が目的。長時間の切断は Webhook で通知）。

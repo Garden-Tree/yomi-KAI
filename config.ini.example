@@ -25,4 +25,8 @@ MAX_READ_LENGTH = 100
 ;True にすると、読み上げた本文をログファイル（log/）に記録します。既定 False（本文はログに残しません）
 ;ENABLE_SUDDEN_DEATH = True
 ;False にすると「突然の死」コマンド（y.sd・/sd）を登録せず、ヘルプにも表示しません（既定 True）
-;多くのサーバーに公開する場合の設定（辞書の上限・使える話者の制限・ブラックリスト・使用量の記録）は docs/hosting.md を参照してください
+;MAX_USER_DICT_ENTRIES = 0
+;個人辞書（y.mydict）の1人あたりの登録数の上限。0 で無制限（既定）
+;PREMIUM_ENABLED = False
+;True にすると settings/premium.json に書いたサーバーで PREMIUM_* の上限を使います（既定 False。docs/hosting.md 参照）
+;多くのサーバーに公開する場合の設定（辞書の上限・使える話者の制限・プレミアムプラン・ブラックリスト・使用量の記録）は docs/hosting.md を参照してください
