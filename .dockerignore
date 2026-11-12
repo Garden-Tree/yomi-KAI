@@ -21,3 +21,5 @@ scripts/
 .pytest_cache/
 .ruff_cache/
 *.log
+# docker compose のビルド用の設定（VOICEVOX_MODELS など）
+.env

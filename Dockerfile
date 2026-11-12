@@ -19,6 +19,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Voicevox Coreのアセット（ONNXランタイム、辞書、モデル）をダウンロード
+# VOICEVOX_MODELS: ダウンロードする vvm のファイル名（空白区切りのパターン。既定は 0.vvm のみ。0.vvm は必ず含める）
+# 例: docker compose build --build-arg VOICEVOX_MODELS="0.vvm 1.vvm 2.vvm"（"*" ですべて）
+# 追加したモデルを使うには config.ini の VOICEVOX_EXTRA_MODELS も設定する（docs/hosting.md 参照）
+ARG VOICEVOX_MODELS="0.vvm"
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then \
         DOWNLOADER_URL="https://github.com/VOICEVOX/voicevox_core/releases/download/0.16.4/download-linux-x64"; \
@@ -30,8 +34,17 @@ RUN ARCH=$(dpkg --print-architecture) && \
     curl -sSL "$DOWNLOADER_URL" -o /tmp/download-linux && \
     chmod +x /tmp/download-linux && \
     yes "y" | /tmp/download-linux -o /app/voicevox_core --exclude c-api --exclude models && \
-    yes "y" | /tmp/download-linux -o /app/voicevox_core --only models --models-pattern 0.vvm && \
-    rm /tmp/download-linux
+    mkdir -p /app/voicevox_core/models/vvms && \
+    set -f && \
+    for pattern in $VOICEVOX_MODELS; do \
+        set +f && \
+        rm -rf /tmp/vvm && \
+        yes "y" | /tmp/download-linux -o /tmp/vvm --only models --models-pattern "$pattern" && \
+        cp /tmp/vvm/models/vvms/*.vvm /app/voicevox_core/models/vvms/ && \
+        cp /tmp/vvm/models/*.txt /app/voicevox_core/models/ || exit 1; \
+    done && \
+    test -f /app/voicevox_core/models/vvms/0.vvm && \
+    rm -rf /tmp/vvm /tmp/download-linux
 
 # copy application code（コードだけの変更ならここから下だけが再ビルドされる）
 COPY --chown=yomi:yomi . .

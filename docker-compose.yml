@@ -1,6 +1,11 @@
 services:
   yomi-kai:
-    build: .
+    build:
+      context: .
+      args:
+        # イメージに入れる VOICEVOX のモデル（空白区切り。既定は 0.vvm のみ）。
+        # 増やすときは docker-compose.yml と同じフォルダの .env に VOICEVOX_MODELS=0.vvm 1.vvm のように書く
+        VOICEVOX_MODELS: ${VOICEVOX_MODELS:-0.vvm}
     # scripts/deploy.sh がこの名前を前提に、ロールバック用のタグ(yomi-kai:previous)を管理する
     image: yomi-kai:latest
     container_name: yomi-kai
