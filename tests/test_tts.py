@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from yomi_kai.tts import CompositeEngine, Speaker, find_speakers
+from yomi_kai.tts.models import ModelManager
 from yomi_kai.tts.pool import InstancePool, LoopThread
 
 
@@ -130,6 +131,8 @@ def make_engine(workers):
 
     engine._pool = engine._loop.run(make_pool())
     engine._style_ids = {"ずんだもん": 3}
+    engine._style_model = {}
+    engine._models = ModelManager([], None)
     engine._default = "ずんだもん"
     return engine, fakes, overall
 
@@ -251,6 +254,8 @@ def test_voicevox_async_cancel_returns_synthesizer_to_pool():
 
     engine._pool = engine._loop.run(make_pool())
     engine._style_ids = {"ずんだもん": 3}
+    engine._style_model = {}
+    engine._models = ModelManager([], None)
     engine._default = "ずんだもん"
 
     async def run():

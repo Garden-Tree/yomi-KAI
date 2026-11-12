@@ -70,26 +70,6 @@ def test_sudden_death_can_be_disabled(tmp_path):
     assert "credit" in result["app"]
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_help_mentions_sd_only_when_enabled(tmp_path, enabled):
-    from yomi_kai.cogs.voice import VoiceCog
-
-    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", enable_sudden_death=enabled)
-    cog = VoiceCog(
-        SimpleNamespace(user=None),
-        config,
-        StubEngine(),
-        DictionaryStore(tmp_path / "dict"),
-        SettingsStore(tmp_path / "settings"),
-        lambda wav: wav,
-    )
-    ctx = FakeCtx(None)
-    asyncio.run(VoiceCog.help_command.callback(cog, ctx))
-    names = [field.name for field in ctx.sent[0][1]["embed"].fields]
-    assert ("y.sd" in names) is enabled
-    assert "y.credit" in names
-
-
 def test_prefix_commands_are_hybrid(setup_result):
     prefix = setup_result["prefix"]
     assert set(prefix) == TOP_LEVEL | SUBCOMMANDS
@@ -198,6 +178,18 @@ def test_credit_lists_each_character_once(google):
     assert [line for line in lines if line.startswith("VOICEVOX:")] == ["VOICEVOX:ずんだもん", "VOICEVOX:四国めたん"]
     assert any("https://voicevox.hiroshiba.jp/term/" in line for line in lines)
     assert any("Google Cloud Text-to-Speech" in line for line in lines) is google
+
+
+def test_credit_names_google_only_when_its_speakers_are_usable():
+    from yomi_kai.cogs.misc import MiscCog
+    from yomi_kai.tts import FilteredEngine
+
+    # USE_GOOGLE_TTS = True でも、SPEAKER_ALLOWLIST で Google の話者が外れていれば Google の行を出さない
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", use_google_tts=True)
+    cog = MiscCog(SimpleNamespace(), config, FilteredEngine(CreditEngine(), ["ずんだもん", "四国めたん"]))
+    ctx = FakeCtx(None)
+    asyncio.run(MiscCog.credit.callback(cog, ctx))
+    assert not any("Google Cloud Text-to-Speech" in line for line in ctx.sent[0][0].splitlines())
 
 
 def test_credit_follows_allowlist():

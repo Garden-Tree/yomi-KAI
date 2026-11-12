@@ -116,7 +116,7 @@ docker compose up -d
 | `y.autojoin add\|del` / `y.autojoin list` | VC に人が入ったら自動で接続 | 登録・解除はサーバー管理 |
 | `y.readbots on\|off` | ほかの Bot・Webhook の発言も読み上げる（既定オフ） | サーバー管理 |
 | `y.status` / `y.plan` | Bot の動作状況 / このサーバーの上限 | |
-| `y.credit` / `y.sd` / `y.help` | クレジット / 突然の死 / ヘルプ | |
+| `y.credit` / `y.sd` / `y.help` | クレジット / 突然の死 / ヘルプ（`y.help コマンド名` で使い方と例） | |
 
 「サーバー管理」は Discord のロールの権限「サーバー管理」（Manage Server）です。権限がない場合は案内が表示されます（スラッシュコマンドでは本人にだけ表示）。
 
@@ -217,7 +217,7 @@ Discord の応答時間、接続中のボイスチャンネルの数、このサ
 
 ### y.help
 
-このヘルプを表示します。
+目的ごと（はじめに・自分の声・サーバーの設定・情報）にまとめたコマンドの一覧を表示します。「サーバー管理」の権限が必要な操作があるコマンドには（管理）と表示します。`y.help コマンド名`（例: `y.help voice`）で、そのコマンドの使い方と例を表示します。スラッシュコマンドでは `/help command:` に入力すると候補が表示されます。
 
 ## 機能
 
@@ -255,6 +255,7 @@ Discord の応答時間、接続中のボイスチャンネルの数、このサ
 - 自動切断までの時間
 - 読み上げる最大文字数 (`MAX_READ_LENGTH`、既定 100、0 で無制限)
 - VOICEVOXの音声モデルをすべて読み込むか (`VOICEVOX_LOAD_ALL_MODELS`、既定 False)
+- 話者を増やすVOICEVOXの音声モデル (`VOICEVOX_EXTRA_MODELS`、既定は空 = 0.vvm のみ)。同時に読み込んでおく数 (`VOICEVOX_MAX_EXTRA_MODELS`、既定 1)、解放するまでの秒数 (`VOICEVOX_MODEL_IDLE`、既定 600)
 - 同時に音声合成する数 (`VOICEVOX_WORKERS`、1〜8、既定 1)
 - 切断通知の送信先 (`ALERT_WEBHOOK_URL`、既定は空 = 通知しない)
 - 切断通知を送るまでの秒数 (`ALERT_AFTER`、既定 300、30 以上)
@@ -267,7 +268,12 @@ Discord の応答時間、接続中のボイスチャンネルの数、このサ
 - メッセージの本文は、既定ではログに記録しません（文字数だけを記録します）。調査のために本文を見たい場合だけ `LOG_READ_TEXT = True` にしてください。
 - 月ごとの使用量（読み上げた文字数とメッセージ数）の記録は、既定では行いません。必要な場合は `RECORD_USAGE = True` にしてください（[docs/hosting.md](./docs/hosting.md) の「使用量の確認」を参照）。
 
-> **VOICEVOXのモデルについて:** 既定では `voicevox_core/models/vvms/0.vvm`（ずんだもん・春日部つむぎ・四国めたん・雨晴はう）だけを読み込みます。他の `.vvm` も配置して使いたい場合は `config.ini` に `VOICEVOX_LOAD_ALL_MODELS = True` を追加してください。モデルを増やすほどメモリ使用量と起動時間が増えます。また、ドロップダウンに表示できる話者は Discord の制限により25件までです（`y.voice 名前` なら25件目以降の話者も指定できます）。
+> **VOICEVOXのモデルについて:** 既定では `voicevox_core/models/vvms/0.vvm`（ずんだもん・春日部つむぎ・四国めたん・雨晴はう）だけを読み込みます。他の `.vvm` も配置して使いたい場合は、次のどちらかを `config.ini` に追加してください。また、ドロップダウンに表示できる話者は Discord の制限により25件までです（`y.voice 名前` なら25件目以降の話者も指定できます）。
+>
+> - `VOICEVOX_EXTRA_MODELS = 1.vvm, 2.vvm`（`*` で 0.vvm 以外のすべて）: 話者の一覧には起動時から出ますが、モデルはその話者で初めて読み上げるときに読み込みます。メモリを節約できる代わりに、最初の1文だけ1〜2秒遅れます。同時に読み込んでおくのは `VOICEVOX_MAX_EXTRA_MODELS` 個（既定 1）までで、`VOICEVOX_MODEL_IDLE` 秒（既定 600）使われなければ解放します。
+> - `VOICEVOX_LOAD_ALL_MODELS = True`: すべての `.vvm` を起動時に読み込みます（従来どおり）。モデルを増やすほどメモリ使用量と起動時間が増えます。
+>
+> 配布版（Windows の ZIP）と Docker イメージには `0.vvm` だけが入っています。他の `.vvm` は [voicevox_vvm](https://github.com/VOICEVOX/voicevox_vvm) などから入手し、配布版は `lib/voicevox_core/models/vvms/`、ソースから動かす場合は `voicevox_core/models/vvms/` に置いてください（Docker は [docs/hosting.md](./docs/hosting.md) 参照）。キャラクターごとに利用規約が違うため、使う前に必ず確認してください。
 
 ### 音声合成の同時実行数（`VOICEVOX_WORKERS`）
 
@@ -279,7 +285,7 @@ VOICEVOX の音声を同時に何件まで合成するかを決める設定で�
 | 2 | 約 530MB | 複数のサーバーで同時に読み上げることが多い |
 | 4 | 約 890MB | 多くのサーバーで常に読み上げている |
 
-- メモリの値は、Windows で `0.vvm` のみを読み込み、しばらく合成を続けたあとの使用量です。Linux / Docker では多少変わります。`VOICEVOX_LOAD_ALL_MODELS = True` の場合は、読み込むモデルの数に比例してさらに増えます。
+- メモリの値は、Windows で `0.vvm` のみを読み込み、しばらく合成を続けたあとの使用量です。Linux / Docker では多少変わります。`VOICEVOX_LOAD_ALL_MODELS = True` の場合は、読み込むモデルの数に比例してさらに増えます（1つあたり約150〜200MB）。`VOICEVOX_EXTRA_MODELS` のモデルは、読み込んでいる間だけ同じだけ増えます。
 - 1 のままでも、長文は文ごとに区切って合成するため、最初の文ができた時点で読み上げが始まります。合成中に Bot のほかの処理が止まることもありません。増やして効果が大きいのは、複数のサーバーで同時に読み上げる場合です。
 - CPU のスレッドは、合成エンジンの数で等分して割り当てます（例: 8 スレッドの CPU で 2 にすると、1 エンジンあたり 4 スレッド）。CPU のコア数より大きくしても速くはなりません。
 - 起動時のログに、エンジンの数と 1 エンジンあたりのスレッド数が表示されます。

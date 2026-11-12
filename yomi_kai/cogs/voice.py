@@ -1,4 +1,4 @@
-"""接続・切断・ヘルプと、メッセージの読み上げ。
+"""接続・切断と、メッセージの読み上げ。
 
 コマンドは hybrid コマンドで、``y.c`` と ``/c`` のどちらでも同じ処理を行う。
 """
@@ -30,7 +30,7 @@ from ..settings import (
     server_speaker,
     should_read_author,
 )
-from ..status import bot_version, status_fields
+from ..status import bot_version, has_google_speakers, status_fields
 from ..text import (
     announce_text,
     autojoin_allowed,
@@ -241,88 +241,6 @@ class VoiceCog(commands.Cog):
         await reply(ctx, f"コマンドが間違っています。`{self.config.prefix}help`を参照してください", private=True)
 
     # --- コマンド ---
-    @commands.hybrid_command(name="help", description="コマンドの一覧を表示します")
-    async def help_command(self, ctx: commands.Context) -> None:
-        prefix = self.config.prefix
-        help_embed = discord.Embed(title="yomi-KAI", color=EMBED_COLOR)
-        help_embed.add_field(name=f"{prefix}c", value="発言者と同じボイスチャンネルに接続します。", inline=False)
-        help_embed.add_field(name=f"{prefix}dc", value="ボイスチャンネルから切断します。", inline=False)
-        help_embed.add_field(
-            name=f"{prefix}s",
-            value=f"読み上げ中のメッセージを飛ばします。`{prefix}s all`で溜まっている分もすべて飛ばします。",
-            inline=False,
-        )
-        help_embed.add_field(
-            name=f"{prefix}voice",
-            value=(
-                f"自分の話者を選びます。`{prefix}voice 名前`で名前を指定して設定、"
-                f"`{prefix}voice list`で話者の一覧を表示、"
-                f"`{prefix}voice reset`で個人設定を解除し、サーバーの話者に戻します。"
-            ),
-            inline=False,
-        )
-        help_embed.add_field(
-            name=f"{prefix}speed `倍率` / {prefix}pitch `高さ`",
-            value=(
-                "自分の読み上げ速度（0.5〜2.0倍）／声の高さ（-10〜+10、0 が標準）を設定します。"
-                "引数なしで現在の値を表示、`reset`で解除します。"
-            ),
-            inline=False,
-        )
-        help_embed.add_field(
-            name=f"{prefix}announce `on|off`",
-            value=(
-                "ボイスチャンネルへの入退室を読み上げるか設定します（サーバー全体）。"
-                f"`{prefix}announce`で現在の設定を表示します。"
-            ),
-            inline=False,
-        )
-        help_embed.add_field(
-            name=f"{prefix}readname `on|off` / {prefix}speedup `on|off`",
-            value=(
-                "発言者の名前を読み上げるか（連投では省略）／読み上げ待ちが溜まったら速く読むかを設定します"
-                "（サーバー全体）。"
-            ),
-            inline=False,
-        )
-        help_embed.add_field(
-            name=f"{prefix}dict / {prefix}mydict",
-            value=f"サーバーの辞書／自分の発言だけに使う個人辞書です。詳しくは`{prefix}dict help`を参照してください。",
-            inline=False,
-        )
-        help_embed.add_field(
-            name="サーバー管理者向け（「サーバー管理」の権限が必要）",
-            value=(
-                f"`{prefix}ignore add|del @ユーザー|@ロール`・`{prefix}ignore list`: 読み上げない人・ロール\n"
-                f"`{prefix}autojoin add|del`・`{prefix}autojoin list`: VC に人が入ったら自動で接続\n"
-                f"`{prefix}readbots on|off`: ほかの Bot・Webhook の発言も読み上げる\n"
-                f"`{prefix}read url|emoji|code|spoiler on|off`: URL・絵文字・コード・ネタバレの読み方"
-                f"（`{prefix}read list` で確認）\n"
-                f"`{prefix}dict import`: 添付した JSON の辞書を読み込む（`{prefix}dict export` で書き出し）"
-            ),
-            inline=False,
-        )
-        help_embed.add_field(
-            name=f"{prefix}status / {prefix}plan",
-            value="Bot の動作状況／このサーバーの上限（読み上げる文字数・辞書の登録数など）を表示します。",
-            inline=False,
-        )
-        if self.config.enable_sudden_death:
-            help_embed.add_field(
-                name=f"{prefix}sd",
-                value=f"「突然の死」に関する操作です。詳しくは`{prefix}sd help`を参照してください。",
-                inline=False,
-            )
-        help_embed.add_field(
-            name=f"{prefix}credit",
-            value="読み上げ音声のクレジット（VOICEVOX:ずんだもん など）を表示します。",
-            inline=False,
-        )
-        help_embed.add_field(name=f"{prefix}help", value="このヘルプを表示します。", inline=False)
-        help_embed.set_footer(text="どのコマンドもスラッシュコマンド（/c、/voice など）として使うこともできます。")
-        await reply(ctx, embed=help_embed)
-        logger.info("helpを表示")
-
     @commands.hybrid_command(name="c", description="あなたのいるボイスチャンネルに接続し、このチャンネルを読み上げます")
     @commands.guild_only()
     async def connect(self, ctx: commands.Context) -> None:
@@ -433,7 +351,8 @@ class VoiceCog(commands.Cog):
             sessions=sum(1 for s in self.sessions.values() if s.is_connected),
             queue=None if ctx.guild is None else (session.pending if session is not None else 0),
             workers=self.config.voicevox_workers,
-            google=self.config.use_google_tts,
+            google=self.config.use_google_tts
+            and has_google_speakers(self.plans.speakers_for(ctx.guild.id if ctx.guild is not None else None)[1]),
             healthy=self.stats.healthy,
             last_error=self.stats.last_error,
             errors=self.stats.errors,
