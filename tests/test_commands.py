@@ -200,6 +200,18 @@ def test_credit_lists_each_character_once(google):
     assert any("Google Cloud Text-to-Speech" in line for line in lines) is google
 
 
+def test_credit_names_google_only_when_its_speakers_are_usable():
+    from yomi_kai.cogs.misc import MiscCog
+    from yomi_kai.tts import FilteredEngine
+
+    # USE_GOOGLE_TTS = True でも、SPEAKER_ALLOWLIST で Google の話者が外れていれば Google の行を出さない
+    config = Config(discord_token="dummy", prefix="y.", afk_time=60, sd_msg="x", use_google_tts=True)
+    cog = MiscCog(SimpleNamespace(), config, FilteredEngine(CreditEngine(), ["ずんだもん", "四国めたん"]))
+    ctx = FakeCtx(None)
+    asyncio.run(MiscCog.credit.callback(cog, ctx))
+    assert not any("Google Cloud Text-to-Speech" in line for line in ctx.sent[0][0].splitlines())
+
+
 def test_credit_follows_allowlist():
     from yomi_kai.cogs.misc import credit_lines
     from yomi_kai.tts import FilteredEngine

@@ -15,6 +15,7 @@ from discord.ext import commands
 
 from ..config import Config
 from ..plans import PlanManager
+from ..status import has_google_speakers
 from ..text import chunk_lines, gen_sd_text
 from ..tts import Speaker, TTSEngine
 from .common import EMBED_COLOR, handle_command_error, invalid_command_notice, reply
@@ -90,7 +91,9 @@ class MiscCog(commands.Cog):
     )
     async def credit(self, ctx: commands.Context) -> None:
         # サーバーではそのサーバーで使える話者、DM ではフリーで使える話者
-        engine = self.plans.engine_for(ctx.guild.id if ctx.guild is not None else None)
-        for chunk in chunk_lines(credit_lines(engine.speakers(), self.config.use_google_tts)):
+        # Google の話者は、USE_GOOGLE_TTS = True で、SPEAKER_ALLOWLIST で外されていないときだけ使える
+        speakers = self.plans.engine_for(ctx.guild.id if ctx.guild is not None else None).speakers()
+        google = self.config.use_google_tts and has_google_speakers(s.name for s in speakers)
+        for chunk in chunk_lines(credit_lines(speakers, google)):
             await reply(ctx, chunk)
         logger.info("creditを表示")
