@@ -314,6 +314,7 @@ class YomiBot(commands.Bot):
 
         from .cogs.admin import AdminCog
         from .cogs.dictionary import DictionaryCog
+        from .cogs.help import HelpCog
         from .cogs.misc import MiscCog, SuddenDeathCog
         from .cogs.plan import PlanCog
         from .cogs.settings import SettingsCog
@@ -352,6 +353,7 @@ class YomiBot(commands.Bot):
             await self.add_cog(SuddenDeathCog(self, self.config))
         await self.add_cog(AdminCog(self, self.config, self.settings))
         await self.add_cog(PlanCog(self, self.config, self.plans, self.store, self.user_store))
+        await self.add_cog(HelpCog(self, self.config))
         await self.sync_app_commands()
 
     async def sync_app_commands(self) -> None:
