@@ -71,11 +71,15 @@ class Speaker:
 
     ``credit`` は利用規約で求められるクレジット表記（VOICEVOX の話者なら ``VOICEVOX:ずんだもん`` のように
     スタイル名を含まないキャラクター名）。不要なエンジン（Google など）は None。
+
+    ``extra`` は既定のモデル（0.vvm）以外の VOICEVOX のモデルの話者（「追加の話者」）なら True。
+    EXTRA_VOICES_PREMIUM_ONLY = True のとき、フリーのサーバーでは使えない。
     """
 
     name: str
     description: str
     credit: str | None = None
+    extra: bool = False
 
 
 def _normalize(name: str) -> str:

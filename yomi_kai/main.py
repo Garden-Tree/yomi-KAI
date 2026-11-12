@@ -37,7 +37,13 @@ def build_engine(config: Config) -> TTSEngine:
     from .tts import CompositeEngine
     from .tts.voicevox import VoicevoxEngine
 
-    voicevox = VoicevoxEngine(load_all_models=config.voicevox_load_all_models, workers=config.voicevox_workers)
+    voicevox = VoicevoxEngine(
+        load_all_models=config.voicevox_load_all_models,
+        workers=config.voicevox_workers,
+        extra_models=config.voicevox_extra_models,
+        max_extra_models=config.voicevox_max_extra_models,
+        model_idle=config.voicevox_model_idle,
+    )
     if not config.use_google_tts:
         return voicevox
 
@@ -75,12 +81,35 @@ def apply_speaker_allowlist(
     return filtered
 
 
+def without_extra_voices(engine: TTSEngine) -> TTSEngine:
+    """追加の話者（0.vvm 以外の VOICEVOX のモデルの話者）を除いたエンジン。追加の話者がなければそのまま返す。"""
+    speakers = engine.speakers()
+    if not any(s.extra for s in speakers):
+        return engine
+    from .tts import FilteredEngine
+
+    filtered = FilteredEngine(engine, [s.name for s in speakers if not s.extra])
+    logger.info(
+        "EXTRA_VOICES_PREMIUM_ONLY: 追加の話者%d件はプレミアムのサーバーだけで使えます",
+        len(speakers) - len(filtered.speakers()),
+    )
+    return filtered
+
+
 def build_plans(config: Config, engine: TTSEngine) -> PlanManager:
     """読み込んだ全話者のエンジンから、フリー・プレミアムで使える話者に絞ったエンジンを作り、プランを組み立てる。
 
     使える話者が1つも残らなければ :class:`ConfigError` を送出する。
     """
-    free_engine = apply_speaker_allowlist(engine, config.speaker_allowlist)
+    free_base = engine
+    if config.extra_voices_premium_only:
+        free_base = without_extra_voices(engine)
+        if not config.premium_enabled:
+            logger.warning(
+                "EXTRA_VOICES_PREMIUM_ONLY = True ですが PREMIUM_ENABLED = False のため、"
+                "追加の話者はどのサーバーでも使えません"
+            )
+    free_engine = apply_speaker_allowlist(free_base, config.speaker_allowlist)
     premium_engine = None
     if config.premium_enabled:
         premium_engine = apply_speaker_allowlist(

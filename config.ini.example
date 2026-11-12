@@ -12,7 +12,17 @@ SD_MSG = 突然の死
 MAX_READ_LENGTH = 100
 ;読み上げる最大文字数。超えた分は「以下略」になります。0 で無制限
 ;VOICEVOX_LOAD_ALL_MODELS = False
-;True にすると voicevox_core/models/vvms/ の *.vvm をすべて読み込みます（既定は 0.vvm のみ）
+;True にすると voicevox_core/models/vvms/ の *.vvm をすべて起動時に読み込みます（既定は 0.vvm のみ）
+;VOICEVOX_EXTRA_MODELS =
+;話者を増やす vvm のファイル名（例: 1.vvm, 2.vvm。* で 0.vvm 以外のすべて）。既定は空（0.vvm のみ）
+;話者の一覧には起動時から出ますが、モデルはその話者で初めて読み上げるときに読み込みます（1〜2秒かかります）
+;VOICEVOX_MAX_EXTRA_MODELS = 1
+;VOICEVOX_EXTRA_MODELS のモデルを同時に読み込んでおく数（1〜32、既定 1）。超えると最も長く使われていないモデルを解放します
+;（1つあたり約150〜200MB 増えます。VOICEVOX_WORKERS が2以上なら、その数だけ倍になります）
+;VOICEVOX_MODEL_IDLE = 600
+;VOICEVOX_EXTRA_MODELS のモデルを、この秒数（60以上）使われなければ解放します。既定は 600（10分）
+;EXTRA_VOICES_PREMIUM_ONLY = False
+;True にすると 0.vvm 以外のモデルの話者をプレミアムのサーバーだけで使えるようにします（PREMIUM_ENABLED = True のとき）
 ;VOICEVOX_WORKERS = 1
 ;同時に音声合成する数（1〜8、既定 1）。増やすと速くなりますが、メモリを多く使います
 ;（合成を続けたあとの目安: 1 で約280MB、2 で約530MB、4 で約890MB。Windows・0.vvm のみで計測）

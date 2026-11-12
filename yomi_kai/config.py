@@ -6,6 +6,9 @@ DISCORD_TOKEN / USE_GOOGLE_TTS / GOOGLE_API_KEY / PREFIX / AFK_TIME / SD_MSG。
 ALERT_WEBHOOK_URL（切断通知用の Discord Webhook、空なら通知しない）、ALERT_AFTER（既定 300 秒、30 以上）、
 STATUS_PUSH_URL / STATUS_PUSH_TOKEN / STATUS_PUSH_INTERVAL（ステータスページへの稼働状況の送信、既定は送らない）、
 VOICEVOX_WORKERS（並行して合成する数、1〜8、既定 1）、
+VOICEVOX_EXTRA_MODELS（話者の指定で読み込む vvm、既定は使わない）、VOICEVOX_MAX_EXTRA_MODELS（同時に読み込んでおく
+追加のモデルの数、既定 1）、VOICEVOX_MODEL_IDLE（追加のモデルを解放するまでの秒数、既定 600）、
+EXTRA_VOICES_PREMIUM_ONLY（0.vvm 以外の話者をプレミアムのサーバーだけにする、既定 False）、
 LOG_READ_TEXT（読み上げた本文をログに出すか、既定 False）、RECORD_USAGE（使用量を記録するか、既定 False）、
 USAGE_DIR（使用量の保存先、既定 usage）、
 MAX_DICT_ENTRIES（辞書の登録数の上限、既定 0 = 無制限）、SPEAKER_ALLOWLIST（使える話者、既定は全話者）、
@@ -54,6 +57,13 @@ class Config:
     status_push_token: str | None = None
     status_push_interval: int = 300
     voicevox_workers: int = 1
+    # 話者の指定で読み込む vvm のファイル名（"*" ならほかのすべて。空なら使わない）
+    voicevox_extra_models: tuple[str, ...] = ()
+    # 同時に読み込んでおく追加のモデルの数と、使われなければ解放するまでの秒数
+    voicevox_max_extra_models: int = 1
+    voicevox_model_idle: int = 600
+    # True なら 0.vvm 以外のモデルの話者（追加の話者）をプレミアムのサーバーだけで使える
+    extra_voices_premium_only: bool = False
     # True のときだけ、読み上げた本文を DEBUG ログ（ファイル）に出す
     log_read_text: bool = False
     # True のときだけ、月ごとの使用量（文字数・メッセージ数）を記録する
@@ -92,6 +102,10 @@ class Config:
             f"max_read_length={self.max_read_length}, alert={'on' if self.alert_webhook_url else 'off'}, "
             f"alert_after={self.alert_after}, status_push={'on' if self.status_push_url else 'off'}, "
             f"voicevox_workers={self.voicevox_workers}, "
+            f"voicevox_extra_models={list(self.voicevox_extra_models)!r}, "
+            f"voicevox_max_extra_models={self.voicevox_max_extra_models}, "
+            f"voicevox_model_idle={self.voicevox_model_idle}, "
+            f"extra_voices_premium_only={self.extra_voices_premium_only}, "
             f"log_read_text={self.log_read_text}, record_usage={self.record_usage}, usage_dir={self.usage_dir!r}, "
             f"max_dict_entries={self.max_dict_entries}, speaker_allowlist={list(self.speaker_allowlist)!r}, "
             f"max_user_dict_entries={self.max_user_dict_entries}, premium_enabled={self.premium_enabled}, "
@@ -155,6 +169,18 @@ def _int(
     return value
 
 
+def _vvm_names(section: configparser.SectionProxy, key: str) -> tuple[str, ...]:
+    """vvm のファイル名のリスト（カンマ区切り）を読む。``*`` はすべて。ファイル名以外は ConfigError。"""
+    names = tuple(dict.fromkeys(split_names(section.get(key) or "")))
+    for name in names:
+        if name != "*" and not re.fullmatch(r"[0-9A-Za-z_-]+(\.vvm)?", name):
+            raise ConfigError(
+                f"config.ini の `{key}` は 1.vvm, 2.vvm のような vvm のファイル名か * で指定してください"
+                f"（現在値: {name!r}）。"
+            )
+    return names
+
+
 def _url_and_secret(
     section: configparser.SectionProxy, url_key: str, secret_key: str
 ) -> tuple[str | None, str | None]:
@@ -215,6 +241,10 @@ def load_config(path: str | Path = "config.ini") -> Config:
             raise ConfigError("config.ini の `STATUS_PUSH_URL` と `STATUS_PUSH_TOKEN` は両方とも指定してください。")
         status_push_interval = _int(section, "STATUS_PUSH_INTERVAL", 300, 60, None, "秒数（整数）")
         voicevox_workers = _int(section, "VOICEVOX_WORKERS", 1, 1, 8)
+        voicevox_extra_models = _vvm_names(section, "VOICEVOX_EXTRA_MODELS")
+        voicevox_max_extra_models = _int(section, "VOICEVOX_MAX_EXTRA_MODELS", 1, 1, 32)
+        voicevox_model_idle = _int(section, "VOICEVOX_MODEL_IDLE", 600, 60, None, "秒数（整数）")
+        extra_voices_premium_only = _boolean(section, "EXTRA_VOICES_PREMIUM_ONLY", False)
         log_read_text = _boolean(section, "LOG_READ_TEXT", False)
         record_usage = _boolean(section, "RECORD_USAGE", False)
         usage_dir = (section.get("USAGE_DIR") or "").strip() or "usage"
@@ -253,6 +283,10 @@ def load_config(path: str | Path = "config.ini") -> Config:
         status_push_token=status_push_token,
         status_push_interval=status_push_interval,
         voicevox_workers=voicevox_workers,
+        voicevox_extra_models=voicevox_extra_models,
+        voicevox_max_extra_models=voicevox_max_extra_models,
+        voicevox_model_idle=voicevox_model_idle,
+        extra_voices_premium_only=extra_voices_premium_only,
         log_read_text=log_read_text,
         record_usage=record_usage,
         usage_dir=usage_dir,
