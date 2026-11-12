@@ -9,7 +9,6 @@ import asyncio
 import io
 import json
 import logging
-import pprint
 
 import discord
 from discord import app_commands
@@ -156,12 +155,15 @@ class DictionaryCog(commands.Cog):
 
     @dict_group.command(name="list", description="登録されている辞書を表示します", ignore_extra=False)
     async def dict_list(self, ctx: commands.Context) -> None:
-        words = (await self.store.aget(ctx.guild.id)).words
-        await reply(ctx, "辞書を表示します")
+        words = dict((await self.store.aget(ctx.guild.id)).words)
         logger.info("辞書を表示します")
-        body = pprint.pformat(dict(words), depth=1)
-        for i in range(0, len(body), CHUNK_SIZE):
-            await reply(ctx, "```" + body[i : i + CHUNK_SIZE] + "```")
+        if not words:
+            await reply(ctx, "辞書（0件）: まだ登録がありません")
+            return
+        await reply(ctx, f"辞書を表示します（{len(words)}件）")
+        # 1語ずつ行に分け、行の途中で切らないようにまとめて送る（```\n と \n``` の8文字を足しても2000文字未満）
+        for chunk in chunk_lines(format_words(words), limit=CHUNK_SIZE):
+            await reply(ctx, f"```\n{chunk}\n```")
 
     @dict_group.command(name="export", description="辞書を JSON ファイルで書き出します", ignore_extra=False)
     async def dict_export(self, ctx: commands.Context) -> None:
