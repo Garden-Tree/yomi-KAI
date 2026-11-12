@@ -44,14 +44,15 @@ yomi_kai/
     google.py          # GoogleEngine
   cogs/
     common.py          # reply（スラッシュでは ephemeral にできる返信）・original_error などの共通ヘルパー
-    voice.py           # help / c / dc / s / status コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・自動接続・入退室の読み上げ）、起動後の再接続
+    voice.py           # c / dc / s / status コマンド、on_message（読み上げ）、on_voice_state_update（自動切断・自動接続・入退室の読み上げ）、起動後の再接続
     settings.py        # voice / speed / pitch（ユーザーごと）、announce / readname / speedup / readbots / read（サーバー全体）
     dictionary.py      # dict add / del / list / export / import / help、mydict add / del / list（個人辞書）
     plan.py            # plan（このサーバーの上限の表示）
     misc.py            # sd（突然の死、ENABLE_SUDDEN_DEATH = False なら Cog ごと追加しない）、credit（音声のクレジット表記）
     admin.py           # サーバー管理者向け: ignore（読み上げない人・ロール）、autojoin（自動接続）
+    help.py            # help（目的ごとの一覧と、help コマンド名 で使い方と例。登録されているコマンドだけを表示）
 docker-entrypoint.sh   # Docker: ボリュームの所有者を直してから一般ユーザーで起動
-tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist / plans / premium_sync / pitch / read_toggles / user_dictionary / rejoin）
+tests/                 # pytest（text / dictionary / settings / session / tts / health / config / commands / voice_cog / usage / allowlist / blocklist / plans / premium_sync / pitch / read_toggles / user_dictionary / rejoin / help）
 docs/hosting.md        # 公開版（ホスティング）向けの推奨設定・ブラックリスト・使用量・保存するデータ
 ```
 
