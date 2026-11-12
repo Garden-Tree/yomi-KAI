@@ -66,6 +66,23 @@ _USER_MENTION_RE = re.compile(r"<@!?([0-9]+)>")
 _ROLE_MENTION_RE = re.compile(r"<@&([0-9]+)>")
 _CHANNEL_MENTION_RE = re.compile(r"<#([0-9]+)>")
 _CUSTOM_EMOJI_RE = re.compile(r"<a?:(\w+):[0-9]+>")
+# タイムスタンプ <t:1700000000> / <t:1700000000:R>（表示形式 t T d D f F R）
+_TIMESTAMP_RE = re.compile(r"<t:-?[0-9]+(?::[tTdDfFR])?>")
+# スラッシュコマンドのメンション </help:123> / </dict list:123>（サブコマンドは空白区切りで2段まで）
+_COMMAND_MENTION_RE = re.compile(r"</([-\w]+(?: [-\w]+){0,2}):[0-9]+>")
+# Unicode の絵文字（😀 👍🏻 ❤️ 🇯🇵 👨‍👩‍👧 など）。VOICEVOX は読まないため、読み上げる前に取り除く
+_EMOJI_RE = re.compile(
+    # 絵文字・記号の面（顔・動物・乗り物・国旗の地域指示文字・肌の色の修飾子などを含む U+1F000〜U+1FAFF）
+    "[\U0001f000-\U0001faff]"
+    # 記号のうち、絵文字の異体字セレクタ（U+FE0F）が付いたもの（❤️ ☀️ など。★ や ♪ だけなら残す）
+    "|[\u2190-\u2bff\u3030\u303d\u3297\u3299]\ufe0f"
+    # 記号のうち、既定で絵文字として表示されるもの（⌚ ☕ ♈ ⚡ ⛔ ✅ ✨ ❌ ❓ ❗ ➕ ⬛ ⭐ ⭕ など）
+    "|[\u231a\u231b\u23e9-\u23ec\u23f0\u23f3\u25fd\u25fe\u2614\u2615\u2648-\u2653\u267f\u2693\u26a1"
+    "\u26aa\u26ab\u26bd\u26be\u26c4\u26c5\u26ce\u26d4\u26ea\u26f2\u26f3\u26f5\u26fa\u26fd\u2705"
+    "\u270a\u270b\u2728\u274c\u274e\u2753-\u2755\u2757\u2795-\u2797\u27b0\u27bf\u2b1b\u2b1c\u2b50\u2b55]"
+    # ゼロ幅接合子（ZWJ）・異体字セレクタ・キーキャップ（1️⃣ は「1」が残る）・タグ文字（地域の旗）
+    "|[\u200d\ufe0e\ufe0f\u20e3\U000e0020-\U000e007f]"
+)
 # *斜体* / **太字** / ***太字斜体***: 記号の内側が空白で始まる・終わる場合（例: `2 * 3 * 4`）は対象外
 _ASTERISK_RE = re.compile(r"(?<!\*)(\*{1,3})(?=\S)(.+?)(?<=\S)\1(?!\*)")
 # _斜体_ / __下線__: Discord と同様、英数字に挟まれた `_`（例: snake_case_name）は対象外
@@ -75,6 +92,7 @@ _UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])(_{1,2})([^_\n]+?)\1(?![A-Za-z0-9
 CODE_BLOCK_TEXT = "コード省略"
 SPOILER_TEXT = "ネタバレ"
 URL_TEXT = "URL"
+TIMESTAMP_TEXT = "時刻"
 # コードブロックの中身を読むときに外す、最初の行の言語指定（```py など）
 _CODE_BLOCK_CONTENT_RE = re.compile(r"```(?:[A-Za-z0-9_+#.-]*\n)?(.*?)```", flags=re.DOTALL)
 _SPOILER_CONTENT_RE = re.compile(r"\|\|(.*?)\|\|", flags=re.DOTALL)
@@ -101,15 +119,18 @@ TRUNCATED_SUFFIX = " 以下略"
 MAX_INPUT_LENGTH = 4000
 MAX_EXPANDED_LENGTH = 20000
 
-# メンション・サーバー絵文字（辞書を当てるあいだ、記号1文字に置き換えて守る）
-_PROTECTED_RE = re.compile(r"<@[!&]?[0-9]+>|<#[0-9]+>|<a?:\w+:[0-9]+>")
+# メンション・サーバー絵文字・タイムスタンプ・スラッシュコマンドのメンション
+# （辞書を当てるあいだ、記号1文字に置き換えて守る）
+_PROTECTED_RE = re.compile(
+    r"<@[!&]?[0-9]+>|<#[0-9]+>|<a?:\w+:[0-9]+>|<t:-?[0-9]+(?::[tTdDfFR])?>|</[-\w]+(?: [-\w]+){0,2}:[0-9]+>"
+)
 # 守った部分の目印に使う私用領域の文字（補助私用面 A。本文の上限より十分多い）
 _PLACEHOLDER_BASE = 0xF0000
 _PLACEHOLDER_RE = re.compile("[\U000f0000-\U000ffffd]")
 
 
 def _protect(text: str) -> tuple[str, list[str]]:
-    """メンション・サーバー絵文字を目印の1文字に置き換える（``<@123>`` の数字などが辞書で壊れないように）。"""
+    """メンション・サーバー絵文字などを目印の1文字に置き換える（``<@123>`` の数字などが辞書で壊れないように）。"""
     tokens: list[str] = []
 
     def keep(match: re.Match[str]) -> str:
@@ -183,6 +204,21 @@ def replace_custom_emojis(text: str, read: bool = True) -> str:
     return _CUSTOM_EMOJI_RE.sub(r"\1" if read else "", text)
 
 
+def replace_timestamps(text: str) -> str:
+    """タイムスタンプ（<t:1700000000:R> など）を「時刻」に置き換える（数字を読み上げないように）。"""
+    return _TIMESTAMP_RE.sub(TIMESTAMP_TEXT, text)
+
+
+def replace_command_mentions(text: str) -> str:
+    """スラッシュコマンドのメンション（</help:123> など）をコマンド名（help）に置き換える。"""
+    return _COMMAND_MENTION_RE.sub(r"\1", text)
+
+
+def strip_emojis(text: str) -> str:
+    """Unicode の絵文字（肌の色・異体字セレクタ・ZWJ でつないだ組み合わせも含む）を取り除く。"""
+    return _EMOJI_RE.sub("", text)
+
+
 def strip_markdown(text: str) -> str:
     text = _ASTERISK_RE.sub(r"\2", text)
     text = _UNDERSCORE_RE.sub(r"\2", text)
@@ -204,10 +240,12 @@ def build_read_text(
     """メッセージ本文を読み上げ用に整形する。
 
     処理順: コード → 辞書置換（個人辞書 ``user_dictionary`` → サーバー辞書）→ URL → ネタバレ → メンション
-    → サーバー絵文字 → マークダウン
+    → タイムスタンプ → スラッシュコマンドのメンション → サーバー絵文字 → Unicode の絵文字 → マークダウン
     → 添付ファイルの説明（``attachments``、:func:`describe_attachments` の結果）を末尾に追加 → 文字数制限。
     コードを最初に処理するのは、コード内の文字列が辞書や URL として読まれないようにするため。
-    辞書置換のあいだ、メンション・サーバー絵文字（``<@123>`` など）は辞書で壊れないように守っておく。
+    辞書置換のあいだ、メンション・サーバー絵文字・タイムスタンプ・スラッシュコマンドのメンション
+    （``<@123>`` など）は辞書で壊れないように守っておく。
+    Unicode の絵文字は辞書のあとに取り除く（辞書に絵文字の読みを登録していればそちらが使われる）。
     辞書置換の前の本文は ``MAX_INPUT_LENGTH``、置換後は ``MAX_EXPANDED_LENGTH`` 文字で打ち切る。
     ``max_length`` が正なら、添付ファイルの説明も含めた整形後の文字数で切り詰める（0 以下で無制限）。
     ``options`` でサーバーごとの URL・サーバー絵文字・コードブロック・ネタバレの読み方を切り替える。
@@ -223,7 +261,10 @@ def build_read_text(
     text = replace_urls(text, read=options.url)
     text = replace_spoilers(text, read=options.spoiler)
     text = replace_mentions(text, user_name=user_name, role_name=role_name, channel_name=channel_name)
+    text = replace_timestamps(text)
+    text = replace_command_mentions(text)
     text = replace_custom_emojis(text, read=options.emoji)
+    text = strip_emojis(text)
     text = strip_markdown(text)
     if attachments:
         text = f"{text} {attachments}" if text.strip() else attachments

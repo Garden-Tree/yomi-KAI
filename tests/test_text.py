@@ -127,6 +127,64 @@ def test_custom_emoji():
     assert build_read_text("<:smile:123>と<a:party_parrot:456>") == "smileとparty_parrot"
 
 
+ZWJ = "\N{ZERO WIDTH JOINER}"
+VS16 = "\N{VARIATION SELECTOR-16}"
+KEYCAP = "\N{COMBINING ENCLOSING KEYCAP}"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("おはよう😀", "おはよう"),
+        ("いいね👍🏻", "いいね"),  # 肌の色の修飾子
+        ("好き❤" + VS16, "好き"),  # 異体字セレクタ付きの ❤️
+        ("日本🇯🇵", "日本"),  # 国旗（地域指示文字2つ）
+        ("家族👨" + ZWJ + "👩" + ZWJ + "👧", "家族"),  # ZWJ でつないだ組み合わせ
+        ("完了✅ すごい✨ 注意⚠" + VS16, "完了 すごい 注意"),
+        ("1" + VS16 + KEYCAP + "番", "1番"),  # キーキャップは数字だけ残す
+    ],
+)
+def test_unicode_emoji_are_removed(text, expected):
+    assert build_read_text(text) == expected
+
+
+def test_text_symbols_without_emoji_presentation_are_kept():
+    # ★ や ♪、矢印などは絵文字として表示されないので残す
+    assert build_read_text("★きらきら♪ →次へ") == "★きらきら♪ →次へ"
+
+
+def test_emoji_only_message_becomes_empty():
+    assert build_read_text("😀👍🏻🇯🇵").strip() == ""
+    # 添付ファイルがあれば説明だけを読む
+    assert build_read_text("😀", attachments="画像") == "画像"
+
+
+def test_dictionary_can_still_read_emoji():
+    # 絵文字は辞書のあとに取り除くので、辞書に登録した絵文字は読みが使われる
+    d = compile_dictionary({"😀": "にっこり"})
+    assert build_read_text("おはよう😀👍", d) == "おはようにっこり"
+
+
+# --- タイムスタンプ・スラッシュコマンド ---
+
+
+@pytest.mark.parametrize("style", ["", ":t", ":T", ":d", ":D", ":f", ":F", ":R"])
+def test_timestamp_is_read_as_jikoku(style):
+    assert build_read_text(f"開始は<t:1700000000{style}>です") == "開始は時刻です"
+
+
+def test_command_mentions_read_command_name():
+    assert build_read_text("</help:123456>を見て") == "helpを見て"
+    assert build_read_text("</dict list:123456>で確認") == "dict listで確認"
+    assert build_read_text("</my_cmd sub-a:1>") == "my_cmd sub-a"
+
+
+def test_dictionary_does_not_break_timestamps_or_command_mentions():
+    d = compile_dictionary({"1": "いち", "t": "てぃー", "help": "へるぷ", ":": "ころん", "/": "すらっしゅ"})
+    text = build_read_text("<t:1700000000:R> </help:123> help 1", d)
+    assert text == "時刻 help へるぷ いち"
+
+
 # --- マークダウン ---
 
 

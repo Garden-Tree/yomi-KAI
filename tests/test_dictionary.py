@@ -342,3 +342,37 @@ def test_dict_export_command(tmp_path):
     assert content == "辞書を書き出しました（1件）"
     assert kwargs["file"].filename == f"dict-{GUILD}.json"
     assert json.loads(kwargs["file"].fp.read()) == {"a": "えー"}
+
+
+def test_dict_list_command_sends_one_entry_per_line_without_splitting(tmp_path):
+    from yomi_kai.cogs.dictionary import DictionaryCog
+    from yomi_kai.config import Config
+
+    store = DictionaryStore(tmp_path / "dict")
+    words = {f"単語{i:03d}_{'w' * 40}": f"よみ{i:03d}{'あ' * 40}" for i in range(120)}
+    store.merge(GUILD, words)
+    cog = DictionaryCog(SimpleNamespace(), Config(discord_token="d", prefix="y.", afk_time=60, sd_msg="x"), store)
+    ctx = FakeCtx(False)
+    asyncio.run(DictionaryCog.dict_list.callback(cog, ctx))
+    contents = [content for content, _ in ctx.sent]
+    assert contents[0] == "辞書を表示します（120件）"
+    bodies = contents[1:]
+    assert len(bodies) > 1  # 1通に収まらない量
+    lines = []
+    for body in bodies:
+        assert len(body) < 2000
+        assert body.startswith("```\n") and body.endswith("\n```")
+        lines.extend(body[4:-4].split("\n"))
+    # どの行も「単語 → 読み」の形で、途中で切れていない
+    assert lines == [f"{w} → {r}" for w, r in words.items()]
+
+
+def test_dict_list_command_on_empty_dictionary(tmp_path):
+    from yomi_kai.cogs.dictionary import DictionaryCog
+    from yomi_kai.config import Config
+
+    store = DictionaryStore(tmp_path / "dict")
+    cog = DictionaryCog(SimpleNamespace(), Config(discord_token="d", prefix="y.", afk_time=60, sd_msg="x"), store)
+    ctx = FakeCtx(False)
+    asyncio.run(DictionaryCog.dict_list.callback(cog, ctx))
+    assert [content for content, _ in ctx.sent] == ["辞書（0件）: まだ登録がありません"]
