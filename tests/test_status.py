@@ -7,7 +7,14 @@ from types import SimpleNamespace
 from test_voice_cog import FakeChannel, FakeVoiceClient, make_cog, make_config, wait_until
 
 from yomi_kai.session import SynthesisStats
-from yomi_kai.status import UNKNOWN, bot_version, format_duration, format_latency, status_fields
+from yomi_kai.status import (
+    UNKNOWN,
+    bot_version,
+    format_duration,
+    format_latency,
+    has_google_speakers,
+    status_fields,
+)
 from yomi_kai.tts import Speaker
 
 
@@ -40,8 +47,15 @@ def test_synthesis_stats_health():
 def test_status_fields():
     fields = dict(
         status_fields(
-            latency=0.05, sessions=2, queue=None, workers=1, healthy=True, last_error=None, errors=0,
-            uptime=None, version=UNKNOWN,
+            latency=0.05,
+            sessions=2,
+            queue=None,
+            workers=1,
+            healthy=True,
+            last_error=None,
+            errors=0,
+            uptime=None,
+            version=UNKNOWN,
         )
     )
     assert fields["Discord の応答時間"] == "50ms"
@@ -53,11 +67,26 @@ def test_status_fields():
 def test_status_synthesis_label_names_google_when_it_is_the_default():
     fields = dict(
         status_fields(
-            latency=0.05, sessions=0, queue=0, workers=1, healthy=True, last_error=None, errors=0,
-            uptime=None, version=UNKNOWN, google=True,
+            latency=0.05,
+            sessions=0,
+            queue=0,
+            workers=1,
+            healthy=True,
+            last_error=None,
+            errors=0,
+            uptime=None,
+            version=UNKNOWN,
+            google=True,
         )
     )
     assert fields["音声合成"] == "Google TTS（VOICEVOX の合成ワーカー 1個）・正常"
+
+
+def test_has_google_speakers_follows_the_available_speakers():
+    assert has_google_speakers(["ずんだもん", "ja-JP-Wavenet-A"])
+    # SPEAKER_ALLOWLIST で Google の話者が外れていれば、USE_GOOGLE_TTS = True でも VOICEVOX だけと表示する
+    assert not has_google_speakers(["ずんだもん", "四国めたん（あまあま）"])
+    assert not has_google_speakers([])
 
 
 class FailingEngine:
@@ -98,3 +127,40 @@ def test_status_command_reports_failed_synthesis(tmp_path, monkeypatch):
     assert fields["音声合成"].startswith("VOICEVOX の合成ワーカー 2個・直近の合成に失敗しています（最後の失敗:")
     assert fields["バージョン"] == "deadbee"
     assert fields["稼働時間"] != UNKNOWN
+
+
+class SpeakersEngine:
+    def __init__(self, *names):
+        self._speakers = [Speaker(name, "fake") for name in names]
+        self.default_speaker = names[0]
+
+    def speakers(self):
+        return list(self._speakers)
+
+    def synthesize(self, text, speaker, speed=1.0, pitch=0.0):
+        return b""
+
+
+def run_status(tmp_path, engine, **config):
+    cog = make_cog(tmp_path, make_config(**config), engine)
+    cog.bot = SimpleNamespace(user=None, latency=0.1, started_at=0.0)
+    sent = []
+
+    class Ctx:
+        interaction = None
+        guild = SimpleNamespace(id=1)
+
+        async def send(self, content=None, **kwargs):
+            sent.append(kwargs["embed"])
+
+    asyncio.run(cog.status.callback(cog, Ctx()))
+    return {f.name: f.value for f in sent[0].fields}["音声合成"]
+
+
+def test_status_command_names_google_only_when_its_speakers_are_usable(tmp_path):
+    # USE_GOOGLE_TTS = True でも、SPEAKER_ALLOWLIST で Google の話者が外れていれば VOICEVOX だけ
+    voicevox_only = SpeakersEngine("ずんだもん", "四国めたん")
+    assert run_status(tmp_path, voicevox_only, use_google_tts=True) == "VOICEVOX の合成ワーカー 1個・正常"
+    with_google = SpeakersEngine("ja-JP-Wavenet-A", "ずんだもん")
+    assert run_status(tmp_path, with_google, use_google_tts=True) == "Google TTS（VOICEVOX の合成ワーカー 1個）・正常"
+    assert run_status(tmp_path, with_google) == "VOICEVOX の合成ワーカー 1個・正常"

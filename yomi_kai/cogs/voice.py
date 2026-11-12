@@ -30,7 +30,7 @@ from ..settings import (
     server_speaker,
     should_read_author,
 )
-from ..status import bot_version, status_fields
+from ..status import bot_version, has_google_speakers, status_fields
 from ..text import (
     announce_text,
     autojoin_allowed,
@@ -351,7 +351,8 @@ class VoiceCog(commands.Cog):
             sessions=sum(1 for s in self.sessions.values() if s.is_connected),
             queue=None if ctx.guild is None else (session.pending if session is not None else 0),
             workers=self.config.voicevox_workers,
-            google=self.config.use_google_tts,
+            google=self.config.use_google_tts
+            and has_google_speakers(self.plans.speakers_for(ctx.guild.id if ctx.guild is not None else None)[1]),
             healthy=self.stats.healthy,
             last_error=self.stats.last_error,
             errors=self.stats.errors,
