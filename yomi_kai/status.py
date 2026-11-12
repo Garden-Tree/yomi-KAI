@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,12 @@ if TYPE_CHECKING:
 
 UNKNOWN = "不明"
 VERSION_ENV = "YOMI_KAI_VERSION"
+GOOGLE_SPEAKER_PREFIX = "ja-JP-"  # Google TTS の話者の名前（yomi_kai/tts/google.py の ja-JP-Wavenet-*）
+
+
+def has_google_speakers(names: Iterable[str]) -> bool:
+    """使える話者に Google TTS の話者が含まれるか（SPEAKER_ALLOWLIST で外されていれば False）。"""
+    return any(name.startswith(GOOGLE_SPEAKER_PREFIX) for name in names)
 
 
 def bot_version(environ: dict[str, str] | None = None) -> str:
@@ -49,7 +56,7 @@ def format_speech_latency(summary: LatencySummary | None) -> str:
 def format_synthesis(
     workers: int, healthy: bool, last_error: float | None, errors: int, *, google: bool = False
 ) -> str:
-    """``google=True`` なら既定の話者が Google TTS（VOICEVOX は追加の話者として使える）。"""
+    """``google=True`` なら Google TTS の話者が使える（VOICEVOX は追加の話者として使える）。"""
     state = "正常" if healthy else "直近の合成に失敗しています"
     engine = f"Google TTS（VOICEVOX の合成ワーカー {workers}個）" if google else f"VOICEVOX の合成ワーカー {workers}個"
     text = f"{engine}・{state}"
@@ -72,7 +79,7 @@ def status_fields(
     google: bool = False,
     speech_latency: LatencySummary | None = None,
 ) -> list[tuple[str, str]]:
-    """(項目名, 値) の一覧。``queue`` が None ならサーバー外（DM）。``google`` は Google TTS を使っているか。
+    """(項目名, 値) の一覧。``queue`` が None ならサーバー外（DM）。``google`` は Google TTS の話者が使えるか。
 
     ``speech_latency`` はメッセージの受信から読み上げの開始までの時間の集計（全サーバー）。
     """
