@@ -48,7 +48,7 @@ yomi-KAIはDiscordのテキストチャンネルに送られた文章をボイ�
 ### Linux
 
 1. リポジトリをクローンします。
-1. Python 3.12以上、FFmpeg、portaudio19-devをインストールします。
+1. Python 3.12以上、FFmpeg、libgomp1 をインストールします（Debian・Ubuntu では `sudo apt install ffmpeg libgomp1`）。
 1. [voicevox_core](https://github.com/VOICEVOX/voicevox_core/releases)からモデル・辞書・DLL等をダウンロードし、`voicevox_core/`フォルダに配置します。
 1. `pip install -r requirements.txt` を実行します。
 1. 上記「事前準備」の通りに `config.ini` を作成し、設定します。
